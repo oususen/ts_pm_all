@@ -1,0 +1,7 @@
+[logger]
+# Level of logging: 'error', 'warning', 'info', or 'debug'.
+level = "error"
+messageFormat = "%(message)s"
+
+[deprecation]
+showwarning = false

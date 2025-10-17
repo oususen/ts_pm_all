@@ -1,0 +1,100 @@
+DELIMITER $$
+
+DROP PROCEDURE IF EXISTS recompute_planned_progress_by_product $$
+CREATE PROCEDURE recompute_planned_progress_by_product(
+    IN p_product_id INT,
+    IN p_start_date DATE,
+    IN p_end_date   DATE
+)
+BEGIN
+    DECLARE v_prev_pp INT DEFAULT 0;
+
+    -- 前日（p_start_dateの前日）の繰越を初期値に採用。なければ0
+    SELECT COALESCE(planned_progress_quantity, 0)
+      INTO v_prev_pp
+      FROM delivery_progress
+     WHERE product_id   = p_product_id
+       AND delivery_date = DATE_SUB(p_start_date, INTERVAL 1 DAY)
+     ORDER BY id
+     LIMIT 1
+     FOR UPDATE;
+
+    START TRANSACTION;
+
+    -- 対象期間の行をロック（併走の取込・編集と衝突しないように）
+    SELECT 1
+      FROM delivery_progress
+     WHERE product_id   = p_product_id
+       AND delivery_date BETWEEN p_start_date AND p_end_date
+     FOR UPDATE;
+
+    -- 日合算用の一時テーブル（セッション内のみ）
+    DROP TEMPORARY TABLE IF EXISTS tmp_day_totals;
+    CREATE TEMPORARY TABLE tmp_day_totals (
+        delivery_date DATE PRIMARY KEY,
+        order_total   INT NOT NULL DEFAULT 0,
+        planned_total INT NOT NULL DEFAULT 0,
+        shipped_total INT NOT NULL DEFAULT 0,
+        day_pp        INT NULL  -- その日締め後の planned_progress_quantity
+    ) ENGINE=Memory;
+
+    -- 同一日のオーダーを合算
+    INSERT INTO tmp_day_totals (delivery_date, order_total, planned_total, shipped_total)
+    SELECT
+        dp.delivery_date,
+        COALESCE(SUM(dp.order_quantity),   0) AS order_total,
+        COALESCE(SUM(dp.planned_quantity), 0) AS planned_total,
+        COALESCE(SUM(dp.shipped_quantity), 0) AS shipped_total
+    FROM delivery_progress dp
+    WHERE dp.product_id = p_product_id
+      AND dp.delivery_date BETWEEN p_start_date AND p_end_date
+    GROUP BY dp.delivery_date
+    ORDER BY dp.delivery_date;
+
+    -- 連鎖計算：日付昇順に prev を更新
+    BEGIN
+        DECLARE done INT DEFAULT 0;
+        DECLARE v_date DATE;
+        DECLARE v_order INT;
+        DECLARE v_plan  INT;
+        DECLARE v_ship  INT;
+
+        DECLARE cur CURSOR FOR
+            SELECT delivery_date, order_total, planned_total, shipped_total
+              FROM tmp_day_totals
+             ORDER BY delivery_date;
+
+        DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
+
+        OPEN cur;
+        day_loop: LOOP
+            FETCH cur INTO v_date, v_order, v_plan, v_ship;
+            IF done = 1 THEN
+                LEAVE day_loop;
+            END IF;
+
+            IF v_ship IS NOT NULL AND v_ship > 0 THEN
+                SET v_prev_pp = v_prev_pp + v_ship - v_order;
+            ELSE
+                SET v_prev_pp = v_prev_pp + v_plan - v_order;
+            END IF;
+
+            UPDATE tmp_day_totals
+               SET day_pp = v_prev_pp
+             WHERE delivery_date = v_date;
+        END LOOP;
+        CLOSE cur;
+    END;
+
+    -- 各日の day_pp を、その日の全レコードへ反映
+    UPDATE delivery_progress dp
+    JOIN tmp_day_totals t
+      ON dp.delivery_date = t.delivery_date
+     AND dp.product_id    = p_product_id
+       SET dp.planned_progress_quantity = t.day_pp
+    WHERE dp.delivery_date BETWEEN p_start_date AND p_end_date;
+
+    COMMIT;
+END $$
+
+DELIMITER ;
