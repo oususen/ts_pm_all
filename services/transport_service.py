@@ -64,6 +64,40 @@ class TransportService:
         """トラック作成"""
         return self.transport_repo.save_truck(truck_data)
     
+    def get_truck_container_rules(self) -> list:
+        return self.transport_repo.get_truck_container_rules()
+
+    def save_truck_container_rule(self, rule_data: dict) -> bool:
+        # 必須キーの最小バリデーション
+        required = ['truck_id', 'container_id', 'max_quantity']
+        for k in required:
+            if k not in rule_data or rule_data[k] in (None, ''):
+                raise ValueError(f"'{k}' は必須です")
+        return self.transport_repo.save_truck_container_rule(rule_data)
+
+    def delete_truck_container_rule(self, rule_id: int) -> bool:
+        return self.transport_repo.delete_truck_container_rule(rule_id)
+    
+    def update_truck_container_rule(self, rule_id: int, update_data: Dict[str, Any]) -> bool:
+        """トラック×容器ルールの一部項目を更新"""
+        if not isinstance(update_data, dict):
+            return False
+        allowed = {k: v for k, v in update_data.items() if k in {"max_quantity", "stack_count", "priority"}}
+        if not allowed:
+            return True
+        # 数値化
+        for k in list(allowed.keys()):
+            if allowed[k] is None or allowed[k] == "":
+                allowed.pop(k)
+                continue
+            try:
+                allowed[k] = int(allowed[k])
+            except Exception:
+                pass
+        if not allowed:
+            return True
+        return self.transport_repo.update_truck_container_rule(rule_id, allowed)
+
     def calculate_loading_plan_from_orders(self, 
                                           start_date: date, 
                                           days: int = 7,

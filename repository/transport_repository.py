@@ -207,7 +207,13 @@ class TransportRepository:
         try:
             query = """
             SELECT 
-                id, truck_id, container_id, max_quantity, created_at
+                id,
+                truck_id,
+                container_id,
+                max_quantity,
+                stack_count,
+                priority,
+                created_at
             FROM truck_container_rules
             ORDER BY truck_id, container_id
             """
@@ -225,7 +231,10 @@ class TransportRepository:
                     'id': row['id'],
                     'truck_id': row['truck_id'],
                     'container_id': row['container_id'],
-                    'max_quantity': row['max_quantity']
+                    'max_quantity': row['max_quantity'],
+                    'stack_count': row.get('stack_count'),
+                    'priority': row.get('priority', 0),
+                    'created_at': row.get('created_at')
                 })
             
             print(f"✅ {len(rules)}件のトラック容器ルールを取得")
@@ -235,13 +244,60 @@ class TransportRepository:
             print(f"⚠️ トラック容器ルール取得エラー（サイズベース計算を使用）: {e}")
             return []
     def save_truck_container_rule(self, rule_data: dict) -> bool:
+        """トラック×容器ルールを保存（UPSERT）。TruckContainerRule は dataclass のため raw SQL を使用"""
         session = self.db_manager.get_session()
         try:
-            rule = TruckContainerRule(**rule_data)
-            session.merge(rule)  # UPSERT 的に扱う
+            truck_id = int(rule_data['truck_id'])
+            container_id = int(rule_data['container_id'])
+            max_quantity = int(rule_data['max_quantity'])
+            priority = int(rule_data.get('priority', 0))
+            stack_count = rule_data.get('stack_count')
+            stack_count = int(stack_count) if stack_count not in (None, "") else None
+
+            # MySQL 用 UPSERT（ユニークキー: truck_id, container_id）
+            if stack_count is None:
+                query = text(
+                    """
+                    INSERT INTO truck_container_rules
+                        (truck_id, container_id, max_quantity, priority)
+                    VALUES
+                        (:truck_id, :container_id, :max_quantity, :priority)
+                    ON DUPLICATE KEY UPDATE
+                        max_quantity = VALUES(max_quantity),
+                        priority     = VALUES(priority)
+                    """
+                )
+                params = {
+                    'truck_id': truck_id,
+                    'container_id': container_id,
+                    'max_quantity': max_quantity,
+                    'priority': priority,
+                }
+            else:
+                query = text(
+                    """
+                    INSERT INTO truck_container_rules
+                        (truck_id, container_id, max_quantity, stack_count, priority)
+                    VALUES
+                        (:truck_id, :container_id, :max_quantity, :stack_count, :priority)
+                    ON DUPLICATE KEY UPDATE
+                        max_quantity = VALUES(max_quantity),
+                        stack_count  = VALUES(stack_count),
+                        priority     = VALUES(priority)
+                    """
+                )
+                params = {
+                    'truck_id': truck_id,
+                    'container_id': container_id,
+                    'max_quantity': max_quantity,
+                    'stack_count': stack_count,
+                    'priority': priority,
+                }
+
+            session.execute(query, params)
             session.commit()
             return True
-        except SQLAlchemyError as e:
+        except Exception as e:
             session.rollback()
             print(f"TruckContainerRule保存エラー: {e}")
             return False
@@ -291,15 +347,12 @@ class TransportRepository:
         finally:
             session.close()
     def delete_truck_container_rule(self, rule_id: int) -> bool:
-        """トラック容器ルールを削除"""
+        """トラック容器ルールを削除（raw SQL）"""
         session = self.db_manager.get_session()
         try:
-            rule = session.get(TruckContainerRule, rule_id)
-            if rule:
-                session.delete(rule)
-                session.commit()
-                return True
-            return False
+            result = session.execute(text("DELETE FROM truck_container_rules WHERE id = :id"), {"id": int(rule_id)})
+            session.commit()
+            return result.rowcount > 0
         except SQLAlchemyError as e:
             session.rollback()
             print(f"TruckContainerRule削除エラー: {e}")
@@ -341,16 +394,22 @@ class TransportRepository:
         finally:
             session.close()
     def update_truck_container_rule(self, rule_id: int, update_data: dict) -> bool:
-        """トラック容器ルールを更新"""
+        """トラック容器ルールを更新（raw SQL）。更新対象: max_quantity, stack_count, priority"""
+        allowed = ["max_quantity", "stack_count", "priority"]
+        sets = []
+        params = {"id": int(rule_id)}
+        for key in allowed:
+            if key in update_data and update_data[key] is not None:
+                sets.append(f"{key} = :{key}")
+                params[key] = int(update_data[key])
+        if not sets:
+            return True  # 変更なし
+        sql = "UPDATE truck_container_rules SET " + ", ".join(sets) + " WHERE id = :id"
         session = self.db_manager.get_session()
         try:
-            rule = session.get(TruckContainerRule, rule_id)
-            if rule:
-                for key, value in update_data.items():
-                    setattr(rule, key, value)
-                session.commit()
-                return True
-            return False
+            result = session.execute(text(sql), params)
+            session.commit()
+            return result.rowcount > 0
         except SQLAlchemyError as e:
             session.rollback()
             print(f"TruckContainerRule更新エラー: {e}")

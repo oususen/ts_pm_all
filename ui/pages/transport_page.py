@@ -27,12 +27,14 @@ class TransportPage:
         st.title("🚚 配送便計画")
         st.write("オーダー情報から自動的にトラック積載計画を作成します。")
         
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "📦 積載計画作成",
             "📊 計画確認", 
             "🧰 容器管理", 
             "🚛 トラック管理",
-            "🔬 検査対象製品"])
+            "🔬 検査対象製品",
+            "🧱 トラック×容器ルール"  
+        ])
         
         with tab1:
             self._show_loading_planning()
@@ -44,6 +46,164 @@ class TransportPage:
             self._show_truck_management()
         with tab5:
             self._show_inspection_products()# ✅ 新しいメソッド
+        with tab6:
+            self._show_truck_container_rules()
+    
+    def _show_truck_container_rules(self):
+        """トラック×容器ルール管理（このページ内のタブ）"""
+        st.header("🧱 トラック×容器ルール")
+        try:
+            trucks_df = self.service.get_trucks()
+            if trucks_df is None or getattr(trucks_df, 'empty', False):
+                trucks_df = pd.DataFrame()
+            containers = self.service.get_containers() or []
+            rules = self.service.get_truck_container_rules() or []
+
+            truck_id_to_name = {}
+            truck_name_to_id = {}
+            if trucks_df is not None and not trucks_df.empty:
+                truck_id_to_name = dict(zip(trucks_df['id'], trucks_df['name']))
+                truck_name_to_id = dict(zip(trucks_df['name'], trucks_df['id']))
+            container_id_to_name = {c.id: c.name for c in containers}
+            container_name_to_id = {c.name: c.id for c in containers}
+
+            # 入力フォーム
+            st.subheader("➕ ルール追加/更新")
+            with st.form("tcr_create_form_in_transport", clear_on_submit=True):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    truck_name = st.selectbox("トラック名", options=["選択"] + list(truck_name_to_id.keys()))
+                with col2:
+                    container_name = st.selectbox("容器名", options=["選択"] + list(container_name_to_id.keys()))
+                with col3:
+                    priority = st.number_input("優先度", min_value=0, value=0, step=1)
+
+                col4, col5 = st.columns(2)
+                with col4:
+                    max_quantity = st.number_input(
+                        "最大積載容器数（段積み後）",
+                        min_value=0,
+                        value=0,
+                        step=1,
+                        help="段積みを考慮した、実際に積載可能な容器の総数（列数×段数×列本数ではなく最終的な本数）"
+                    )
+                with col5:
+                    stack_count = st.number_input(
+                        "段積み数(任意)",
+                        min_value=0,
+                        value=0,
+                        step=1,
+                        help="同一列に重ねる段数。未設定の場合は容器のmax_stackを利用"
+                    )
+
+                submitted = st.form_submit_button("保存", type="primary")
+                if submitted:
+                    if truck_name == "選択" or container_name == "選択":
+                        st.error("トラック名と容器名を選択してください")
+                    else:
+                        try:
+                            data = {
+                                'truck_id': int(truck_name_to_id[truck_name]),
+                                'container_id': int(container_name_to_id[container_name]),
+                                'max_quantity': int(max_quantity),
+                                'priority': int(priority)
+                            }
+                            if stack_count and int(stack_count) > 0:
+                                data['stack_count'] = int(stack_count)
+                            self.service.save_truck_container_rule(data)
+                            st.success("ルールを保存しました")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"保存エラー: {e}")
+
+            # 一覧
+            st.subheader("📋 登録済みルール")
+            if not rules:
+                st.info("ルールがありません")
+            else:
+                display = []
+                for r in rules:
+                    display.append({
+                        'id': r.get('id'),
+                        'トラック名': truck_id_to_name.get(r.get('truck_id'), r.get('truck_id')),
+                        '容器名': container_id_to_name.get(r.get('container_id'), r.get('container_id')),
+                        '最大積載容器数（段積み後）': r.get('max_quantity'),  # editable
+                        '段積み数': r.get('stack_count'),          # editable
+                        '優先度': r.get('priority', 0),            # editable
+                    })
+                df = pd.DataFrame(display)
+                st.write("一覧（編集可能）")
+                edited_df = st.data_editor(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        'id': st.column_config.NumberColumn('ID', disabled=True),
+                        'トラック名': st.column_config.TextColumn('トラック名', disabled=True),
+                        '容器名': st.column_config.TextColumn('容器名', disabled=True),
+                        '最大積載容器数（段積み後）': st.column_config.NumberColumn('最大積載容器数（段積み後）', min_value=0, step=1, help="段積みを考慮した実容器本数"),
+                        '段積み数': st.column_config.NumberColumn('段積み数', min_value=0, step=1),
+                        '優先度': st.column_config.NumberColumn('優先度', min_value=0, step=1),
+                    },
+                    key="tcr_editor"
+                )
+
+                if st.button("💾 変更を保存", type="primary", key="tcr_save_changes"):
+                    try:
+                        changes = 0
+                        # 行ごとに差分を比較
+                        for idx in range(len(df)):
+                            before = df.iloc[idx]
+                            after = edited_df.iloc[idx]
+                            if (
+                                before['最大積載容器数（段積み後）'] != after['最大積載容器数（段積み後）'] or
+                                before['段積み数'] != after['段積み数'] or
+                                before['優先度'] != after['優先度']
+                            ):
+                                rid = int(after['id']) if pd.notna(after['id']) else None
+                                if rid is None:
+                                    continue
+                                update_data = {}
+                                if before['最大積載容器数（段積み後）'] != after['最大積載容器数（段積み後）']:
+                                    update_data['max_quantity'] = int(after['最大積載容器数（段積み後）'] or 0)
+                                if before['段積み数'] != after['段積み数']:
+                                    # None/NaN 対応
+                                    val = after['段積み数']
+                                    update_data['stack_count'] = int(val) if pd.notna(val) else None
+                                if before['優先度'] != after['優先度']:
+                                    update_data['priority'] = int(after['優先度'] or 0)
+                                if update_data:
+                                    ok = self.service.update_truck_container_rule(rid, update_data)
+                                    if ok:
+                                        changes += 1
+                        if changes > 0:
+                            st.success(f"{changes} 件のルールを更新しました")
+                            st.rerun()
+                        else:
+                            st.info("変更はありませんでした")
+                    except Exception as e:
+                        st.error(f"更新エラー: {e}")
+
+                st.divider()
+                st.subheader("🗑️ ルール削除")
+                target_id = st.selectbox(
+                    "削除するルールID",
+                    options=["選択"] + [str(r.get('id')) for r in rules if r.get('id') is not None],
+                    key="tcr_delete_select"
+                )
+                if st.button("削除", type="secondary", disabled=(target_id == "選択"), key="tcr_delete_btn"):
+                    try:
+                        rid = int(target_id)
+                        ok = self.service.delete_truck_container_rule(rid)
+                        if ok:
+                            st.success("削除しました")
+                        else:
+                            st.warning("対象のルールが見つかりませんでした")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"削除エラー: {e}")
+        except Exception as e:
+            st.error(f"ルール管理画面エラー: {e}")
     def _show_inspection_products(self):
         """検査対象製品（F/$）の注文詳細表示"""
         st.header("🔬 検査対象製品一覧")
