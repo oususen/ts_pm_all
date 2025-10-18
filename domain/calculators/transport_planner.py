@@ -126,10 +126,24 @@ class TransportPlanner:
                     demand['final_day_overflow'] = True
         # Step8: 翌日着トラックの積載日を前日に調整
         self._adjust_for_next_day_arrival_trucks(daily_plans, truck_map, start_date)
+        
+        # Step9: トラック移動後にplanned_datesを再計算（期間外の日付も含める）
+        all_dates_with_trucks = [
+            datetime.strptime(date_str, '%Y-%m-%d').date()
+            for date_str in daily_plans.keys()
+            if daily_plans[date_str]['trucks']
+        ]
+        if all_dates_with_trucks:
+            all_dates_with_trucks.sort()
+            planned_dates = all_dates_with_trucks
+            period_start = planned_dates[0]
+            period_end = planned_dates[-1]
+        else:
+            period_start = working_dates[0]
+            period_end = working_dates[-1]
+        
         # サマリー作成
         summary = self._create_summary(daily_plans, use_non_default, planned_dates)
-        period_start = planned_dates[0] if planned_dates else working_dates[0]
-        period_end = planned_dates[-1] if planned_dates else working_dates[-1]
         return {
             'daily_plans': daily_plans,
             'summary': summary,
@@ -221,14 +235,34 @@ class TransportPlanner:
             except Exception:
                 capacity = 1
 
-            planning_quantity = order.get('planning_quantity', order.get('order_quantity', 0))
-            try:
-                quantity = int(planning_quantity)
-            except (TypeError, ValueError):
-                quantity = 0
+    # 旧 planned_quantity は使わず、残数量ベースに統一
+            def _to_int(x, default=0):
+                try:
+                    import pandas as pd
+                    if x is None or (hasattr(pd, "isna") and pd.isna(x)):
+                        return default
+                    return int(x)
+                except Exception:
+                    return default
 
+            # 1) remaining_quantity があれば最優先
+            if 'remaining_quantity' in getattr(order, 'index', []):
+                quantity = max(0, _to_int(order.get('remaining_quantity'), 0))
+            else:
+                # 2) order_quantity と shipped_quantity から計算
+                oq = _to_int(order.get('order_quantity'), 0)
+                sq = order.get('shipped_quantity', None)
+                if sq is not None:
+                    sq = _to_int(sq, 0)
+                    quantity = max(0, oq - sq)
+                else:
+                    # 3) 最後の手段として order_quantity
+                    quantity = max(0, oq)
+
+            # 0 以下は不要
             if quantity <= 0:
                 continue
+
 
             remainder = quantity % capacity
             if quantity == 0:
@@ -924,6 +958,30 @@ class TransportPlanner:
         if hasattr(date_value, 'date'):
             return date_value.date()
         return None
+    def _get_remaining_quantity(self, order) -> int:
+        def to_int(v, default=0):
+            try:
+                import pandas as pd
+                if v is None or (hasattr(pd, "isna") and pd.isna(v)):
+                    return default
+                return int(v)
+            except Exception:
+                return default
+
+        # 1) remaining_quantity 優先
+        if 'remaining_quantity' in getattr(order, 'index', []):
+            rem = to_int(order.get('remaining_quantity'), 0)
+            return max(0, rem)
+
+        # 2) order - shipped
+        oq = order.get('order_quantity', None)
+        sq = order.get('shipped_quantity', None)
+        if oq is not None and sq is not None:
+            return max(0, to_int(oq) - to_int(sq))
+
+        # 3) 最後の手段として order_quantity（planned_quantity は使わない）
+        return max(0, to_int(order.get('order_quantity'), 0))
+ 
 
     def _relocate_remaining_demands(self, remaining_demands, daily_plans, truck_map, 
                                     container_map, working_dates, use_non_default):
