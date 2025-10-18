@@ -124,6 +124,8 @@ class TransportPlanner:
             if final_plan.get('remaining_demands'):
                 for demand in final_plan['remaining_demands']:
                     demand['final_day_overflow'] = True
+        # Step8: 翌日着トラックの積載日を前日に調整
+        self._adjust_for_next_day_arrival_trucks(daily_plans, truck_map, start_date)
         # サマリー作成
         summary = self._create_summary(daily_plans, use_non_default, planned_dates)
         period_start = planned_dates[0] if planned_dates else working_dates[0]
@@ -148,13 +150,16 @@ class TransportPlanner:
         return working_dates
 
     def _can_arrive_on_time(self, truck_info: Dict[str, Any], loading_date: date, delivery_date: date) -> bool:
-        """トラックが納期までに到着できるか判定"""
+        """
+        トラックが納期までに到着できるか判定
+        
+        注意：第一段階ではarrival_day_offsetを無視（常に0として扱う）
+        翌日着トラックの調整は第二段階で実施
+        """
         if delivery_date is None or loading_date is None:
             return True
-        try:
-            offset = int(truck_info.get('arrival_day_offset', 0) or 0)
-        except (TypeError, ValueError):
-            offset = 0
+        # arrival_day_offsetを無視して、積載日=到着日として判定
+        offset = 0
         arrival_date = loading_date + timedelta(days=offset)
         return arrival_date <= delivery_date
 
@@ -245,35 +250,22 @@ class TransportPlanner:
             
             total_floor_area += total_floor_area_needed
             
-            # トラックの到着日オフセットを考慮して積載日を決定
+            # トラックIDを取得（arrival_day_offsetは後で調整）
             truck_ids_str = product.get('used_truck_ids')
             if truck_ids_str and not pd.isna(truck_ids_str):
                 truck_ids = [int(tid.strip()) for tid in str(truck_ids_str).split(',')]
             else:
                 truck_ids = [tid for tid, t in truck_map.items() if t.get('default_use', False)]
             
-            # 各トラックの積載日を計算
-            truck_loading_dates = {}
-            for truck_id in truck_ids:
-                if truck_id in truck_map:
-                    offset = int(truck_map[truck_id].get('arrival_day_offset', 0))
-                    loading_date = delivery_date - timedelta(days=offset)
-                    
-                    # 営業日チェック
-                    original_loading_date = loading_date
-                    if self.calendar_repo:
-                        for _ in range(7):
-                            if self.calendar_repo.is_working_day(loading_date):
-                                break
-                            loading_date -= timedelta(days=1)
-                    
-                    truck_loading_dates[truck_id] = loading_date
+            # 納期日を積載日として使用（arrival_day_offsetは最後に調整）
+            primary_loading_date = delivery_date
             
-            # 最も早い積載日を使用
-            if truck_ids and truck_ids[0] in truck_loading_dates:
-                primary_loading_date = truck_loading_dates[truck_ids[0]]
-            else:
-                primary_loading_date = min(truck_loading_dates.values()) if truck_loading_dates else None
+            # 営業日チェック
+            if self.calendar_repo:
+                for _ in range(7):
+                    if self.calendar_repo.is_working_day(primary_loading_date):
+                        break
+                    primary_loading_date -= timedelta(days=1)
             
             # 計画期間内のみ
             if primary_loading_date and primary_loading_date in working_dates:
@@ -301,7 +293,6 @@ class TransportPlanner:
                     'delivery_date': delivery_date,
                     'loading_date': primary_loading_date,
                     'truck_ids': truck_ids,
-                    'truck_loading_dates': truck_loading_dates,
                     'max_stack': max_stack,
                     'stackable': getattr(container, 'stackable', False),
                     'can_advance': bool(product.get('can_advance', 0)),
@@ -359,17 +350,8 @@ class TransportPlanner:
                 allowed_truck_ids = demand.get('truck_ids', [])
                 if not allowed_truck_ids:
                     allowed_truck_ids = list(available_trucks.keys())
-                # ✅ 修正: この日に積載できるトラックのみをフィルタ
-                truck_loading_dates = demand.get('truck_loading_dates', {})
-                valid_truck_ids = []
-                for truck_id in allowed_truck_ids:
-                    # このトラックの正しい積載日を確認
-                    if truck_id in truck_loading_dates:
-                        if truck_loading_dates[truck_id] == current_date:
-                            valid_truck_ids.append(truck_id)
-                    else:
-                        # truck_loading_datesにない場合は許可
-                        valid_truck_ids.append(truck_id)
+                # シンプルに全てのallowed_truck_idsを使用
+                valid_truck_ids = [tid for tid in allowed_truck_ids if tid in available_trucks]
                 # ✅ 修正: 複数トラックへの分割積載を試みる
                 remaining_demand = demand.copy()
                 has_loaded_any = False  # 何か積載できたかフラグ
@@ -423,13 +405,6 @@ class TransportPlanner:
                     # 残りを前倒し候補に
                     if demand.get('can_advance', False):
                         remaining_demand['is_advanced'] = True
-                        original_loading_date = demand.get('loading_date')
-                        for truck_id in demand.get('truck_ids', []):
-                            if truck_id in demand.get('truck_loading_dates', {}):
-                                original_truck_date = demand['truck_loading_dates'][truck_id]
-                                date_diff = (original_truck_date - original_loading_date).days
-                                new_truck_date = prev_date + timedelta(days=date_diff)
-                                remaining_demand['truck_loading_dates'][truck_id] = new_truck_date
                         remaining_demand['loading_date'] = prev_date
                         demands_to_forward.append(remaining_demand)
                     else:
@@ -439,13 +414,6 @@ class TransportPlanner:
                     # 全く積載できなかった - 前倒し候補
                     if demand.get('can_advance', False):
                         demand['is_advanced'] = True
-                        original_loading_date = demand.get('loading_date')
-                        for truck_id in demand.get('truck_ids', []):
-                            if truck_id in demand.get('truck_loading_dates', {}):
-                                original_truck_date = demand['truck_loading_dates'][truck_id]
-                                date_diff = (original_truck_date - original_loading_date).days
-                                new_truck_date = prev_date + timedelta(days=date_diff)
-                                demand['truck_loading_dates'][truck_id] = new_truck_date
                         demand['loading_date'] = prev_date
                         demands_to_forward.append(demand)
                     else:
@@ -540,22 +508,10 @@ class TransportPlanner:
                 truck_state = truck_states[truck_id]
                 truck_info = truck_map[truck_id]
                 container_id = remaining_demand['container_id']
-                # この日付でこのトラックに積載できるか確認
-                truck_loading_dates = remaining_demand.get('truck_loading_dates', {})
-                if truck_id in truck_loading_dates:
-                    correct_loading_date = truck_loading_dates[truck_id]
-                    demand_loading_date = remaining_demand.get('loading_date')
-
-                    # 積載日が一致しない場合はスキップ
-                    if demand_loading_date and correct_loading_date != demand_loading_date:
-                        continue
-                    loading_date_for_truck = correct_loading_date
-                else:
-                    loading_date_for_truck = current_date
-
+                
+                # 納期チェック（シンプル化：current_dateから到着可能かのみチェック）
                 demand_delivery_date = remaining_demand.get('delivery_date')
-                if not self._can_arrive_on_time(truck_info, loading_date_for_truck, demand_delivery_date):
-                    print(f"      ⚠️ トラック {truck_info.get('name', truck_id)} は納期 {demand_delivery_date} に間に合わないため積載不可")
+                if not self._can_arrive_on_time(truck_info, current_date, demand_delivery_date):
                     continue
                 # 同じ容器が既に積載されているか確認（段積み統合用）
                 same_container_items = [item for item in truck_state['loaded_items'] 
@@ -680,7 +636,6 @@ class TransportPlanner:
                                 'surplus': demand.get('surplus', 0),
                                 'can_advance': demand.get('can_advance', False),
                                 'is_advanced': demand.get('is_advanced', False),
-                                'truck_loading_dates': demand.get('truck_loading_dates', {}),
                                 'truck_ids': demand.get('truck_ids', []),
                                 'stackable': getattr(container, 'stackable', False),
                                 'max_stack': max_stack
@@ -766,7 +721,6 @@ class TransportPlanner:
                         'capacity': capacity,
                         'can_advance': remaining_demand.get('can_advance', False),
                         'is_advanced': remaining_demand.get('is_advanced', False),
-                        'truck_loading_dates': remaining_demand.get('truck_loading_dates', {}),
                         'truck_ids': remaining_demand.get('truck_ids', []),
                         'stackable': stackable,
                         'max_stack': max_stack
@@ -975,25 +929,22 @@ class TransportPlanner:
                                     container_map, working_dates, use_non_default):
         """
         Step4: 積み残しを他のトラック候補で再配置
-        各積み残しについて、truck_loading_datesを確認し、
-        他のトラック候補の積載日に空きがあれば再配置
+        各積み残しについて、他のトラック候補の積載日に空きがあれば再配置
         """
         print(f"\n🔍 Step4: 積み残し再配置開始 - 対象: {len(remaining_demands)}件")
         for demand in remaining_demands:
             relocated = False
-            truck_loading_dates = demand.get('truck_loading_dates', {})
             truck_ids = demand.get('truck_ids', [])
             original_loading_date = demand.get('loading_date')
-            # ✅ 全トラック候補を試す（翌日以降なら第1候補も空いている可能性がある）
+            
+            # 全てのトラック候補を試す
             for truck_id in truck_ids:
-                if truck_id not in truck_loading_dates:
+                # 同じ日の同じトラックは既に試したのでスキップ
+                target_date = original_loading_date
+                if not target_date:
                     continue
-                # このトラックの正しい積載日を取得
-                target_date = truck_loading_dates[truck_id]
                 target_date_str = target_date.strftime('%Y-%m-%d')
-                # ✅ 元の積載日と同じ日はスキップ（既に失敗している）
-                if original_loading_date and target_date == original_loading_date:
-                    continue
+                
                 # 計画期間内かチェック
                 if target_date not in working_dates:
                     continue
@@ -1419,6 +1370,86 @@ class TransportPlanner:
         if calculated_quantity != verified_quantity:
             print(f"    🔄 数量補正: {calculated_quantity} → {verified_quantity}")
         return verified_quantity
+
+    def _adjust_for_next_day_arrival_trucks(self, daily_plans, truck_map, start_date):
+        """
+        翌日着トラック（arrival_day_offset=1）の積載日を前日に調整
+        
+        重要：到着日は納期日のまま変わらないため、can_advance（前倒し可否）のチェックは不要
+        お客さんから見れば納期日に届くので「前倒し」ではない
+        
+        期間外でもOK（例：期間が10-15～10-28の場合、10-15のトラックを10-14に移動）
+        """
+        print(f"\n📅 翌日着トラックの積載日調整を開始...")
+        
+        # 日付順にソート
+        sorted_dates = sorted(daily_plans.keys())
+        
+        for date_str in sorted_dates:
+            current_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            day_plan = daily_plans[date_str]
+            
+            # この日のトラックプランをチェック
+            trucks_to_move = []
+            for truck_plan in day_plan['trucks']:
+                truck_id = truck_plan['truck_id']
+                if truck_id not in truck_map:
+                    continue
+                    
+                truck_info = truck_map[truck_id]
+                arrival_offset = int(truck_info.get('arrival_day_offset', 0) or 0)
+                
+                # arrival_day_offset=1のトラックを前日に移動
+                if arrival_offset == 1:
+                    trucks_to_move.append(truck_plan)
+            
+            # 移動対象のトラックを前日に移動
+            for truck_plan in trucks_to_move:
+                # 営業日の前日を探す
+                prev_date = current_date - timedelta(days=1)
+                
+                # 非営業日の場合、営業日を遡る
+                if self.calendar_repo:
+                    max_attempts = 7  # 最大7日遡る
+                    for _ in range(max_attempts):
+                        if self.calendar_repo.is_working_day(prev_date):
+                            break
+                        prev_date -= timedelta(days=1)
+                    else:
+                        # 営業日が見つからない場合は警告
+                        print(f"  ⚠️ 営業日が見つかりません。{current_date}の7日前まで全て非営業日")
+                
+                prev_date_str = prev_date.strftime('%Y-%m-%d')
+                
+                # 前日のプランが存在しない場合は作成
+                if prev_date_str not in daily_plans:
+                    daily_plans[prev_date_str] = {
+                        'trucks': [],
+                        'total_trips': 0,
+                        'warnings': [],
+                        'remaining_demands': []
+                    }
+                
+                # トラックプランを前日に移動（到着日は変わらないため、can_advanceチェック不要）
+                if prev_date == current_date - timedelta(days=1):
+                    print(f"  📦 トラックID {truck_plan['truck_id']} ({truck_plan['truck_name']}) を {date_str} → {prev_date_str} に移動")
+                else:
+                    print(f"  📦 トラックID {truck_plan['truck_id']} ({truck_plan['truck_name']}) を {date_str} → {prev_date_str} に移動（非営業日をスキップ）")
+                
+                # 全ての積載アイテムのloading_dateを更新
+                for item in truck_plan['loaded_items']:
+                    item['loading_date'] = prev_date
+                    item['adjusted_for_next_day_arrival'] = True  # フラグを追加
+                
+                # 前日のプランに追加
+                daily_plans[prev_date_str]['trucks'].append(truck_plan)
+                daily_plans[prev_date_str]['total_trips'] = len(daily_plans[prev_date_str]['trucks'])
+                
+                # 当日のプランから削除
+                day_plan['trucks'].remove(truck_plan)
+                day_plan['total_trips'] = len(day_plan['trucks'])
+        
+        print(f"✅ 翌日着トラックの積載日調整が完了しました")
 
     def _create_summary(self, daily_plans, use_non_default, planned_dates=None) -> Dict:
         """サマリー作成"""
