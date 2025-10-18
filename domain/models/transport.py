@@ -55,6 +55,7 @@ class TruckContainerRule:
     container_id: int
     id: Optional[int] = None
     max_quantity: Optional[int] = None
+    stack_count: Optional[int] = None
     priority: int = 0
     truck_name: Optional[str] = None
     container_name: Optional[str] = None
@@ -74,10 +75,11 @@ class TruckContainerRule:
         return (self.truck_id == other.truck_id and
                 self.container_id == other.container_id and
                 self.max_quantity == other.max_quantity and
+                self.stack_count == other.stack_count and
                 self.priority == other.priority)
     
     def __hash__(self):
-        return hash((self.truck_id, self.container_id, self.max_quantity, self.priority))
+        return hash((self.truck_id, self.container_id, self.max_quantity, self.stack_count, self.priority))
 
 
 @dataclass
