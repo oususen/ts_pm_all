@@ -52,7 +52,7 @@ class DeliveryProgressPage:
 
         # フィルター - デフォルトを過去10日間に変更
         st.subheader("🔍 フィルター")
-        col_f1, col_f2, col_f3 = st.columns(3)
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         
         with col_f1:
             start_date = st.date_input(
@@ -74,7 +74,13 @@ class DeliveryProgressPage:
                 options=['未出荷', '計画済', '一部出荷', '出荷完了'],
                 default=['未出荷', '計画済', '一部出荷', '出荷完了'],
                 key="progress_status_filter"
-            )      
+            )
+
+        with col_f4:
+            product_filter = st.text_input(
+                "製品コード（部分一致）",
+                key="progress_product_filter"
+            ).strip()
         # 進度データ取得
         try:
             progress_df = self.service.get_delivery_progress(start_date, end_date)
@@ -118,6 +124,10 @@ class DeliveryProgressPage:
                 # ステータスフィルター適用
                 if status_filter:
                     progress_df = progress_df[progress_df['status'].isin(status_filter)]
+                if product_filter:
+                    progress_df = progress_df[
+                        progress_df['product_code'].fillna('').str.contains(product_filter, case=False, na=False)
+                    ]
                 
                 # 表示形式選択を追加
                 st.subheader("📋 表示形式")
@@ -147,6 +157,9 @@ class DeliveryProgressPage:
                     # 表示用データフレーム
                     display_columns = ['urgency', 'order_id', 'product_code', 'product_name',
                                      'customer_name', 'delivery_date', 'order_quantity']
+
+                    if 'manual_planning_quantity' in progress_df.columns:
+                        display_columns.append('manual_planning_quantity')
                     
                     # planned_quantityカラムがあれば追加
                     if 'planned_quantity' in progress_df.columns:
@@ -165,6 +178,7 @@ class DeliveryProgressPage:
                         'customer_name': '得意先',
                         'delivery_date': '納期',
                         'order_quantity': '受注数',
+                        'manual_planning_quantity': '手動計画',
                         'planned_quantity': '計画数',
                         'shipped_quantity': '出荷済',
                         'remaining_quantity': '残数',
@@ -181,6 +195,75 @@ class DeliveryProgressPage:
                             "納期": st.column_config.DateColumn("納期", format="YYYY-MM-DD"),
                         }
                     )
+                    
+                    st.subheader("🖊️ 手動計画数量の一括編集")
+                    editor_source = progress_df[['id', 'order_id', 'product_code', 'product_name', 'delivery_date', 'order_quantity']].copy()
+                    editor_source = editor_source.reset_index(drop=True)
+                    manual_series = progress_df.get('manual_planning_quantity')
+                    if manual_series is None:
+                        manual_series = pd.Series([None] * len(progress_df))
+                    editor_source['manual_planning_quantity'] = manual_series.reset_index(drop=True)
+                    original_editor = editor_source.copy()
+                    editor_source['manual_planning_quantity'] = editor_source['manual_planning_quantity'].astype('Float64')
+                    
+                    edited_table = st.data_editor(
+                        editor_source,
+                        num_rows="fixed",
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            'id': st.column_config.NumberColumn('ID', format='%d'),
+                            'order_id': st.column_config.TextColumn('オーダーID'),
+                            'product_code': st.column_config.TextColumn('製品コード'),
+                            'product_name': st.column_config.TextColumn('製品名'),
+                            'delivery_date': st.column_config.DateColumn('納期', format='YYYY-MM-DD'),
+                            'order_quantity': st.column_config.NumberColumn('受注数', format='%d'),
+                            'manual_planning_quantity': st.column_config.NumberColumn('手動計画', min_value=0, step=1),
+                        },
+                        disabled=['id', 'order_id', 'product_code', 'product_name', 'delivery_date', 'order_quantity'],
+                        key="manual_plan_editor",
+                    )
+                    st.caption("手動計画列のみ編集できます。空欄にすると自動計画に戻ります。")
+
+                    if st.button("手動計画を保存", type="primary", key="save_manual_plans"):
+                        updated_count = 0
+                        for idx, row in edited_table.iterrows():
+                            new_val = row['manual_planning_quantity']
+                            orig_val = original_editor.loc[idx, 'manual_planning_quantity']
+                            if pd.isna(new_val) or new_val == '':
+                                new_db_val = None
+                            else:
+                                try:
+                                    new_db_val = int(new_val)
+                                except (TypeError, ValueError):
+                                    st.warning(f"ID {int(row['id'])} の値が無効です。")
+                                    continue
+
+                            if pd.isna(orig_val):
+                                orig_compare = None
+                            else:
+                                try:
+                                    orig_compare = int(orig_val)
+                                except (TypeError, ValueError):
+                                    orig_compare = None
+
+                            if orig_compare == new_db_val:
+                                continue
+
+                            success = self.service.update_delivery_progress(
+                                int(row['id']),
+                                {'manual_planning_quantity': new_db_val}
+                            )
+                            if success:
+                                updated_count += 1
+                            else:
+                                st.error(f"ID {int(row['id'])} の更新に失敗しました。")
+
+                        if updated_count:
+                            st.success(f"{updated_count} 件の手動計画を更新しました。")
+                            st.rerun()
+                        else:
+                            st.info("変更はありませんでした。")
                     
                     # 詳細編集・出荷実績入力
                     st.subheader("📝 詳細編集・出荷実績入力")
@@ -238,6 +321,25 @@ class DeliveryProgressPage:
                                             key=f"notes_{progress_id}"
                                         )
                                     
+                                    manual_value = progress_row.get('manual_planning_quantity')
+                                    use_manual = st.checkbox(
+                                        "手動計画数量を指定",
+                                        value=pd.notna(manual_value),
+                                        key=f"use_manual_{progress_id}"
+                                    )
+                                    if pd.notna(manual_value):
+                                        manual_default = int(manual_value)
+                                    else:
+                                        manual_default = int(progress_row.get('order_quantity', 0) or 0)
+                                    manual_quantity = st.number_input(
+                                        "手動計画数量",
+                                        min_value=0,
+                                        value=manual_default,
+                                        step=1,
+                                        key=f"manual_qty_{progress_id}",
+                                        disabled=not use_manual
+                                    )
+                                    
                                     submitted = st.form_submit_button("💾 更新", type="primary")
                                     
                                     if submitted:
@@ -245,7 +347,8 @@ class DeliveryProgressPage:
                                             'delivery_date': new_delivery_date,
                                             'priority': new_priority,
                                             'status': new_status,
-                                            'notes': new_notes
+                                            'notes': new_notes,
+                                            'manual_planning_quantity': int(manual_quantity) if use_manual else None
                                         }
                                         
                                         success = self.service.update_delivery_progress(progress_id, update_data)
@@ -258,10 +361,13 @@ class DeliveryProgressPage:
                             # 出荷実績入力タブ
                             with shipment_tab:
                                 # 現在の出荷状況を表示
+                                manual_display = progress_row.get('manual_planning_quantity')
+                                manual_display = int(manual_display) if pd.notna(manual_display) else '未設定'
                                 st.info(f"""
                                 **現在の状況:**
                                 - 受注数: {progress_row.get('order_quantity', 0)}
                                 - 計画数: {progress_row.get('planned_quantity', 0)}
+                                - 手動計画: {manual_display}
                                 - 出荷済: {progress_row.get('shipped_quantity', 0)}
                                 - 残数: {progress_row.get('remaining_quantity', 0)}
                                 """)

@@ -438,6 +438,7 @@ class TransportPage:
                     
         if 'loading_plan' in st.session_state:
             result = st.session_state['loading_plan']
+            summary = result.get('summary', {})
             
             st.markdown("---")
             st.subheader("💾 計画の保存とエクスポート")
@@ -501,9 +502,54 @@ class TransportPage:
                             file_name=filename,
                             mime="text/csv"
                         )
+
                     except Exception as e:
                         st.error(f"CSV出力エラー: {e}")
-    
+
+            st.markdown("---")
+            st.subheader("Excel修正の取り込み")
+            st.write("Excelに出力した計画を修正した後、ここからアップロードすると数量変更を取り込みます。`編集キー`列（旧`edit_key`）は変更しないでください。編集可能な列は **コンテナ数**, **総数量**, **納品日** のみです。その他の列は書き換えないでください。")
+            if summary.get('manual_adjusted'):
+                st.info(f"Excelで手動調整 {summary.get('manual_adjustment_count', 0)} 件を反映済みです。")
+            uploaded_excel = st.file_uploader(
+                "修正済みExcelファイル (.xlsx)",
+                type=['xlsx'],
+                key="loading_plan_excel_upload"
+            )
+
+            if uploaded_excel is not None:
+                if st.button("Excelの修正を適用", type="primary", key="apply_excel_updates"):
+                    with st.spinner("Excelの変更を反映中..."):
+                        apply_result = self.service.apply_excel_adjustments(result, uploaded_excel)
+                    errors = apply_result.get('errors') or []
+                    for err in errors:
+                        st.error(err)
+                    changes = apply_result.get('changes') or []
+                    if changes:
+                        st.session_state['loading_plan'] = apply_result.get('plan', result)
+                        st.success(f"Excelから{len(changes)}件の変更を反映しました。")
+                        change_rows = []
+                        for change in changes:
+                            for field, diff in change['changes'].items():
+                                change_rows.append({
+                                    'edit_key': change['edit_key'],
+                                    '積込日': change['loading_date'],
+                                    'トラック': change['truck_name'],
+                                    '品目コード': change['product_code'],
+                                    '品目名': change['product_name'],
+                                    '項目': field,
+                                    '変更前': diff.get('before'),
+                                    '変更後': diff.get('after')
+                                })
+                        if change_rows:
+                            st.dataframe(pd.DataFrame(change_rows), use_container_width=True, hide_index=True)
+                        result = st.session_state['loading_plan']
+                        summary = result.get('summary', {})
+                        if summary.get('manual_adjusted'):
+                            st.info(f"Excelで手動調整 {summary.get('manual_adjustment_count', 0)} 件を反映済みです。")
+                    elif not errors:
+                        st.warning("Excelから変更が見つかりませんでした。")
+
     def _show_plan_view(self):
         """計画確認"""
         st.header("📊 積載計画確認")

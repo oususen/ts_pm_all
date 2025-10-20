@@ -245,11 +245,19 @@ class TransportPlanner:
                 except Exception:
                     return default
 
-            # 1) remaining_quantity があれば最優先
-            if 'remaining_quantity' in getattr(order, 'index', []):
+            manual_fixed = False
+            manual_qty = order.get('manual_planning_quantity', None)
+
+            if manual_qty is not None and not pd.isna(manual_qty):
+                manual_fixed = True
+                desired_qty = _to_int(manual_qty, 0)
+                shipped_done = _to_int(order.get('shipped_quantity'), 0)
+                quantity = max(0, desired_qty - shipped_done)
+            elif 'remaining_quantity' in getattr(order, 'index', []):
+                # 1) remaining_quantity があれば最優先
                 quantity = max(0, _to_int(order.get('remaining_quantity'), 0))
             else:
-                # 2) order_quantity と shipped_quantity から計算
+                # 2) order_quantity と shipped_quantity 差分を計算
                 oq = _to_int(order.get('order_quantity'), 0)
                 sq = order.get('shipped_quantity', None)
                 if sq is not None:
@@ -259,7 +267,7 @@ class TransportPlanner:
                     # 3) 最後の手段として order_quantity
                     quantity = max(0, oq)
 
-            # 0 以下は不要
+            # 0 以下はスキップ
             if quantity <= 0:
                 continue
 
@@ -329,7 +337,9 @@ class TransportPlanner:
                     'truck_ids': truck_ids,
                     'max_stack': max_stack,
                     'stackable': getattr(container, 'stackable', False),
-                    'can_advance': bool(product.get('can_advance', 0)),
+                    'can_advance': False if manual_fixed else bool(product.get('can_advance', 0)),
+                    'manual_fixed': manual_fixed,
+                    'manual_requested_quantity': manual_qty if manual_fixed else None,
                     'is_advanced': False
                 })
         # 日平均積載量を計算

@@ -45,7 +45,8 @@ class DeliveryProgressRepository:
                         dp.planned_quantity,
                         dp.shipped_quantity,
                         dp.planned_progress_quantity,
-                        dp.remaining_quantity,                        
+                        dp.remaining_quantity,
+                        dp.manual_planning_quantity,
                         dp.status,
                         dp.customer_code,
                         dp.customer_name,
@@ -80,6 +81,7 @@ class DeliveryProgressRepository:
                         dp.shipped_quantity,
                         dp.planned_progress_quantity,
                         dp.remaining_quantity,
+                        dp.manual_planning_quantity,
                         dp.status,
                         dp.customer_code,
                         dp.customer_name,
@@ -347,13 +349,15 @@ class DeliveryProgressRepository:
         session = self.db.get_session()
         
         try:
+            progress_data = dict(progress_data)
+            progress_data.setdefault('manual_planning_quantity', None)
             query = text("""
                 INSERT INTO delivery_progress
                 (order_id, product_id, order_date, delivery_date, order_quantity,
-                 customer_code, customer_name, delivery_location, priority, notes)
+                 customer_code, customer_name, delivery_location, priority, notes, manual_planning_quantity)
                 VALUES
                 (:order_id, :product_id, :order_date, :delivery_date, :order_quantity,
-                 :customer_code, :customer_name, :delivery_location, :priority, :notes)
+                 :customer_code, :customer_name, :delivery_location, :priority, :notes, :manual_planning_quantity)
             """)
             
             result = session.execute(query, progress_data)

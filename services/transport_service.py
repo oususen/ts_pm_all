@@ -15,10 +15,55 @@ from datetime import datetime
 from io import BytesIO
 import json
 from sqlalchemy import text
+import math
 
 class TransportService:
     """運送関連ビジネスロジック（カレンダー統合版）"""
     
+    EDITABLE_COLUMN_ORDER = [
+        'edit_key',
+        'loading_date',
+        'truck_name',
+        'truck_id',
+        'trip_number',
+        'product_code',
+        'product_name',
+        'product_id',
+        'container_id',
+        'num_containers',
+        'total_quantity',
+        'delivery_date',
+        'original_num_containers',
+        'original_total_quantity',
+        'original_delivery_date',
+        'capacity_per_container',
+        'surplus',
+        'notes'
+    ]
+
+    EDITABLE_COLUMN_LABELS = {
+        'edit_key': '編集キー',
+        'loading_date': '積込日',
+        'truck_name': 'トラック名',
+        'truck_id': 'トラックID',
+        'trip_number': '便番号',
+        'product_code': '製品コード',
+        'product_name': '製品名',
+        'product_id': '製品ID',
+        'container_id': 'コンテナID',
+        'num_containers': 'コンテナ数',
+        'total_quantity': '総数量',
+        'delivery_date': '納品日',
+        'original_num_containers': '元コンテナ数',
+        'original_total_quantity': '元総数量',
+        'original_delivery_date': '元納品日',
+        'capacity_per_container': 'コンテナ容量',
+        'surplus': '残数量',
+        'notes': '備考'
+    }
+
+    EDITABLE_COLUMN_REVERSE = {label: key for key, label in EDITABLE_COLUMN_LABELS.items()}
+
     def __init__(self, db_manager):
         self.transport_repo = TransportRepository(db_manager)
         self.production_repo = ProductionRepository(db_manager)
@@ -154,6 +199,24 @@ class TransportService:
                 ].reset_index(drop=True)
 
             # 納入進捗・計画進度を加味した計画数量を算出
+            manual_mask = pd.Series(False, index=orders_df.index)
+            manual_remaining = pd.Series(0, index=orders_df.index, dtype='float64')
+            if 'manual_planning_quantity' in orders_df.columns:
+                manual_series = pd.to_numeric(orders_df['manual_planning_quantity'], errors='coerce')
+                orders_df['manual_planning_quantity'] = manual_series
+                manual_mask = manual_series.notna()
+                if 'shipped_quantity' in orders_df.columns:
+                    shipped_series = pd.to_numeric(orders_df['shipped_quantity'], errors='coerce').fillna(0)
+                else:
+                    shipped_series = pd.Series(0, index=orders_df.index, dtype='float64')
+                if not isinstance(shipped_series, pd.Series):
+                    shipped_series = pd.Series(shipped_series, index=orders_df.index)
+                manual_remaining.loc[manual_mask] = (
+                    manual_series.loc[manual_mask].fillna(0) - shipped_series.loc[manual_mask].fillna(0)
+                ).clip(lower=0)
+                orders_df['manual_planning_applied'] = manual_mask
+            else:
+                orders_df['manual_planning_applied'] = False
             remaining_qty = None
             if 'remaining_quantity' in orders_df.columns:
                 remaining_qty = orders_df['remaining_quantity']
@@ -168,6 +231,9 @@ class TransportService:
                 else:
                     remaining_base = pd.Series(0, index=orders_df.index)
                 orders_df['__remaining_qty'] = remaining_base.clip(lower=0)
+
+            if manual_mask.any():
+                orders_df.loc[manual_mask, '__remaining_qty'] = manual_remaining.loc[manual_mask]
 
             if 'planned_progress_quantity' in orders_df.columns:
                 orders_df['__progress_deficit'] = orders_df['planned_progress_quantity'].fillna(0).apply(
@@ -186,6 +252,9 @@ class TransportService:
                 )
 
             # 残/不足ともに0の場合はスキップ
+            if manual_mask.any():
+                orders_df.loc[manual_mask, 'planning_quantity'] = manual_remaining.loc[manual_mask]
+
             orders_df = orders_df[orders_df['planning_quantity'] > 0].reset_index(drop=True)
 
             orders_df.drop(columns=['__remaining_qty', '__progress_deficit'], inplace=True, errors='ignore')
@@ -221,9 +290,95 @@ class TransportService:
             calendar_repo=self.calendar_repo if use_calendar else None  # カレンダー渡す
         )
 
+        self._annotate_loading_plan_items(result)
+
         result['unplanned_orders'] = self._find_unplanned_orders(orders_df, result)
 
         return result
+
+    def _annotate_loading_plan_items(self, plan_result: Dict[str, Any]) -> None:
+        """積載計画データにExcel編集用の識別子と初期値を付与する。"""
+        if not plan_result or 'daily_plans' not in plan_result:
+            return
+
+        sequence = 0
+        daily_plans = plan_result.get('daily_plans', {})
+        for date_str in sorted(daily_plans.keys()):
+            day_plan = daily_plans.get(date_str) or {}
+            trucks = day_plan.get('trucks', [])
+
+            for trip_idx, truck_plan in enumerate(trucks, start=1):
+                truck_plan.setdefault('trip_number', trip_idx)
+                truck_plan.setdefault('trip_key', f"{date_str}|{truck_plan.get('truck_id', '')}|{trip_idx}")
+
+                loaded_items = truck_plan.get('loaded_items', [])
+                for item_idx, item in enumerate(loaded_items, start=1):
+                    sequence += 1
+                    truck_id = truck_plan.get('truck_id')
+                    product_id = item.get('product_id', '')
+                    key_parts = [
+                        str(date_str),
+                        str(truck_id) if truck_id is not None else '',
+                        str(trip_idx),
+                        str(item_idx),
+                        str(product_id),
+                        str(sequence)
+                    ]
+                    edit_key = "|".join(key_parts)
+                    item.setdefault('edit_key', edit_key)
+                    item.setdefault('trip_number', trip_idx)
+                    item.setdefault('loading_date', date_str)
+                    item.setdefault('original_num_containers', item.get('num_containers'))
+                    item.setdefault('original_total_quantity', item.get('total_quantity'))
+                    item.setdefault('truck_trip_key', truck_plan.get('trip_key'))
+
+                    # 数量の整合性を強制的に合わせる
+                    try:
+                        num_containers = item.get('num_containers')
+                        if pd.isna(num_containers):
+                            num_containers = 0
+                        num_containers = int(num_containers or 0)
+                    except Exception:
+                        num_containers = 0
+
+                    capacity = item.get('capacity')
+                    if capacity is None:
+                        capacity = item.get('capacity_per_container')
+                    try:
+                        if pd.isna(capacity):
+                            capacity = 0
+                        capacity = int(capacity or 0)
+                    except Exception:
+                        capacity = 0
+
+                    surplus_value = item.get('surplus', 0)
+                    if pd.isna(surplus_value):
+                        surplus_value = 0
+                    try:
+                        surplus_value = int(surplus_value)
+                    except Exception:
+                        try:
+                            surplus_value = float(surplus_value)
+                        except Exception:
+                            surplus_value = 0
+
+                    expected_quantity = None
+                    if capacity and num_containers:
+                        expected_quantity = max(0, num_containers * capacity - surplus_value)
+
+                    manual_requested = item.get('manual_requested_quantity')
+                    if expected_quantity is not None and manual_requested is not None:
+                        try:
+                            manual_requested = int(manual_requested)
+                            expected_quantity = min(expected_quantity, manual_requested)
+                        except Exception:
+                            pass
+
+                    if expected_quantity is not None:
+                        item['total_quantity'] = expected_quantity
+                        item.setdefault('original_total_quantity', expected_quantity)
+                        item['capacity_per_container'] = capacity
+                        item['surplus'] = surplus_value
 
     def save_loading_plan(self, plan_result: Dict[str, Any], plan_name: str = None) -> int:
         """積載計画をDBに保存"""
@@ -231,7 +386,9 @@ class TransportService:
     
     def get_loading_plan(self, plan_id: int) -> Dict[str, Any]:
         """保存済み積載計画を取得"""
-        return self.loading_plan_repo.get_loading_plan(plan_id)
+        plan = self.loading_plan_repo.get_loading_plan(plan_id)
+        self._annotate_loading_plan_items(plan)
+        return plan
     
     def get_all_loading_plans(self) -> List[Dict]:
         """全積載計画のリスト取得"""
@@ -295,6 +452,15 @@ class TransportService:
             elif export_format == 'weekly':
                 self._export_weekly_plan(writer, plan_result)
             
+            edit_rows = self._build_editable_rows(plan_result)
+            if edit_rows:
+                edit_df = pd.DataFrame(edit_rows)
+                column_order = [col for col in self.EDITABLE_COLUMN_ORDER if col in edit_df.columns]
+                if column_order:
+                    edit_df = edit_df[column_order]
+                edit_df = edit_df.rename(columns=self.EDITABLE_COLUMN_LABELS)
+                edit_df.to_excel(writer, sheet_name='編集用', index=False)
+
             if plan_result.get('unloaded_tasks'):
                 unloaded_df = pd.DataFrame([{
                     '製品コード': task['product_code'],
@@ -413,6 +579,201 @@ class TransportService:
                 sheet_name = week_key[:31]
                 week_df.to_excel(writer, sheet_name=sheet_name, index=False)
     
+    def _build_editable_rows(self, plan_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Excelでの修正対象となる行データを作成する。"""
+        rows: List[Dict[str, Any]] = []
+        if not plan_result:
+            return rows
+
+        daily_plans = plan_result.get('daily_plans', {})
+        for date_str in sorted(daily_plans.keys()):
+            day_plan = daily_plans.get(date_str) or {}
+            for truck_plan in day_plan.get('trucks', []):
+                trip_number = truck_plan.get('trip_number')
+                truck_id = truck_plan.get('truck_id')
+                truck_name = truck_plan.get('truck_name')
+
+                for item in truck_plan.get('loaded_items', []):
+                    delivery_date = item.get('delivery_date')
+                    if isinstance(delivery_date, datetime):
+                        delivery_value = delivery_date.date()
+                    else:
+                        delivery_value = delivery_date
+
+                    original_delivery = item.get('original_date')
+                    if isinstance(original_delivery, datetime):
+                        original_delivery = original_delivery.date()
+
+                    rows.append({
+                        'edit_key': str(item.get('edit_key', '')),
+                        'loading_date': date_str,
+                        'truck_id': truck_id,
+                        'truck_name': truck_name,
+                        'trip_number': trip_number,
+                        'product_id': item.get('product_id'),
+                        'product_code': item.get('product_code'),
+                        'product_name': item.get('product_name'),
+                        'container_id': item.get('container_id'),
+                        'num_containers': item.get('num_containers'),
+                        'total_quantity': item.get('total_quantity'),
+                        'original_num_containers': item.get('original_num_containers'),
+                        'original_total_quantity': item.get('original_total_quantity'),
+                        'delivery_date': delivery_value,
+                        'original_delivery_date': original_delivery,
+                        'capacity_per_container': item.get('capacity'),
+                        'surplus': item.get('surplus'),
+                        'notes': item.get('memo') or item.get('notes')
+                    })
+
+        return rows
+
+    def _recalculate_plan_utilizations(self, plan_result: Dict[str, Any], affected_trip_keys: List[tuple]) -> None:
+        """�S�Z�b�g�ɋύX�����g���b�N�p�̓��ϗ��v�Z"""
+        if not plan_result or not affected_trip_keys:
+            return
+
+        containers = self.get_containers() or []
+        container_map = {c.id: c for c in containers if hasattr(c, 'id')}
+
+        trucks_df = self.get_trucks()
+        truck_info_map: Dict[int, Dict[str, Any]] = {}
+        if trucks_df is not None and not getattr(trucks_df, 'empty', False):
+            for _, row in trucks_df.iterrows():
+                truck_id = row.get('id')
+                if pd.isna(truck_id):
+                    continue
+                try:
+                    truck_info_map[int(truck_id)] = row.to_dict()
+                except (TypeError, ValueError):
+                    continue
+
+        for date_str, truck_id, trip_number in affected_trip_keys:
+            day_plan = plan_result.get('daily_plans', {}).get(date_str)
+            if not day_plan:
+                continue
+
+            for truck_plan in day_plan.get('trucks', []):
+                plan_truck_id = truck_plan.get('truck_id')
+                plan_trip = truck_plan.get('trip_number')
+
+                if trip_number is not None and plan_trip != trip_number:
+                    continue
+
+                if str(plan_truck_id) != str(truck_id):
+                    continue
+
+                self._recalculate_truck_plan_utilization(truck_plan, truck_info_map, container_map)
+                break
+
+    def _recalculate_truck_plan_utilization(
+        self,
+        truck_plan: Dict[str, Any],
+        truck_info_map: Dict[int, Dict[str, Any]],
+        container_map: Dict[int, Any]
+    ) -> None:
+        """�V���O�g���b�N�p�̉��ϗ��v�Z"""
+        truck_id = truck_plan.get('truck_id')
+        truck_info = None
+        candidate_keys = []
+        if truck_id is not None:
+            candidate_keys.append(truck_id)
+            try:
+                candidate_keys.append(int(round(float(truck_id))))
+            except (TypeError, ValueError):
+                pass
+
+        for key in candidate_keys:
+            if key is None:
+                continue
+            normalized = key
+            try:
+                normalized = int(key)
+            except (TypeError, ValueError):
+                pass
+
+            if normalized in truck_info_map:
+                truck_info = truck_info_map[normalized]
+                break
+            if key in truck_info_map:
+                truck_info = truck_info_map[key]
+                break
+
+        if not truck_info:
+            return
+
+        def _to_float(val):
+            if pd.isna(val):
+                return 0.0
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return 0.0
+
+        width = _to_float(truck_info.get('width'))
+        depth = _to_float(truck_info.get('depth'))
+        height = _to_float(truck_info.get('height'))
+        max_weight = _to_float(truck_info.get('max_weight'))
+
+        truck_floor_area = (width * depth) / 1_000_000 if width and depth else 0.0
+        truck_volume = (width * depth * height) / 1_000_000_000 if width and depth and height else 0.0
+
+        container_totals: Dict[int, Dict[str, Any]] = {}
+
+        for item in truck_plan.get('loaded_items', []):
+            container_id = item.get('container_id')
+            container = container_map.get(container_id)
+            if not container:
+                continue
+
+            try:
+                num_containers = int(round(float(item.get('num_containers', 0) or 0)))
+            except (TypeError, ValueError):
+                num_containers = 0
+
+            num_containers = max(num_containers, 0)
+
+            per_area = ((container.width or 0) * (container.depth or 0)) / 1_000_000
+            per_volume = ((container.width or 0) * (container.depth or 0) * (container.height or 0)) / 1_000_000_000
+            per_weight = getattr(container, 'max_weight', 0) or 0
+            stackable = bool(getattr(container, 'stackable', False))
+            max_stack = getattr(container, 'max_stack', 1) or 1
+
+            item['num_containers'] = num_containers
+            item['floor_area_per_container'] = per_area
+            item['floor_area'] = per_area * num_containers
+            item['volume_per_container'] = per_volume
+            item['weight_per_container'] = per_weight
+
+            totals = container_totals.setdefault(container_id, {
+                'num_containers': 0,
+                'per_area': per_area,
+                'per_volume': per_volume,
+                'per_weight': per_weight,
+                'stackable': stackable,
+                'max_stack': max_stack
+            })
+            totals['num_containers'] += num_containers
+
+        loaded_area = 0.0
+        loaded_volume = 0.0
+        loaded_weight = 0.0
+
+        for totals in container_totals.values():
+            num = totals['num_containers']
+            if totals['stackable'] and totals['max_stack'] > 1:
+                used_slots = math.ceil(num / totals['max_stack'])
+            else:
+                used_slots = num
+
+            loaded_area += totals['per_area'] * used_slots
+            loaded_volume += totals['per_volume'] * num
+            loaded_weight += totals['per_weight'] * num
+
+        utilization = truck_plan.setdefault('utilization', {})
+        utilization['floor_area_rate'] = round(loaded_area / truck_floor_area * 100, 1) if truck_floor_area > 0 else 0
+        utilization['volume_rate'] = round(loaded_volume / truck_volume * 100, 1) if truck_volume > 0 else 0
+        utilization['weight_rate'] = round(loaded_weight / max_weight * 100, 1) if max_weight > 0 else 0
+
     def export_loading_plan_to_csv(self, plan_result: Dict[str, Any]) -> str:
         """積載計画をCSV形式で出力"""
         
@@ -464,6 +825,235 @@ class TransportService:
         else:
             return ""
 
+    def apply_excel_adjustments(self, plan_result: Dict[str, Any], excel_source: Any) -> Dict[str, Any]:
+        """Excelで編集された計画の変更を取り込み、再計算する。"""
+        response = {
+            'plan': plan_result,
+            'changes': [],
+            'errors': []
+        }
+
+        if plan_result is None:
+            response['errors'].append("計画データがありません。")
+            return response
+
+        if excel_source is None:
+            response['errors'].append("Excelファイルが指定されていません。")
+            return response
+
+        if isinstance(excel_source, BytesIO):
+            excel_bytes = excel_source.getvalue()
+        elif hasattr(excel_source, "getvalue"):
+            excel_bytes = excel_source.getvalue()
+        elif hasattr(excel_source, "read"):
+            excel_bytes = excel_source.read()
+        elif isinstance(excel_source, (bytes, bytearray)):
+            excel_bytes = excel_source
+        else:
+            response['errors'].append("Excelファイルを読み込めませんでした。")
+            return response
+
+        buffer = BytesIO(excel_bytes)
+        sheet_candidates = ['編集用', 'EditPlan', 'EditablePlan', 'Editable']
+        edit_df = None
+        used_sheet = None
+
+        for sheet in sheet_candidates:
+            try:
+                buffer.seek(0)
+                edit_df = pd.read_excel(buffer, sheet_name=sheet)
+                used_sheet = sheet
+                break
+            except ValueError:
+                continue
+            except Exception as exc:
+                response['errors'].append(f"Excel読み込みエラー: {exc}")
+                return response
+
+        if edit_df is None:
+            response['errors'].append("編集用シート(編集用 / EditPlan)が見つかりません。")
+            return response
+
+        edit_df.columns = [str(col).strip() for col in edit_df.columns]
+        rename_candidates = {
+            col: self.EDITABLE_COLUMN_REVERSE[col]
+            for col in edit_df.columns
+            if col in self.EDITABLE_COLUMN_REVERSE
+        }
+        if rename_candidates:
+            edit_df = edit_df.rename(columns=rename_candidates)
+
+        if 'edit_key' not in edit_df.columns:
+            response['errors'].append("編集用シートにedit_key列がありません。")
+            return response
+
+        edit_df = edit_df.copy()
+        edit_df = edit_df[~edit_df['edit_key'].isna()]
+        edit_df['edit_key'] = edit_df['edit_key'].astype(str).str.strip()
+        edit_df = edit_df[(edit_df['edit_key'] != '') & (edit_df['edit_key'].str.lower() != 'nan')]
+
+        if edit_df.empty:
+            response['errors'].append("編集用シートに有効なデータがありません。")
+            return response
+
+        duplicated_keys = edit_df['edit_key'][edit_df['edit_key'].duplicated()].unique()
+        if len(duplicated_keys) > 0:
+            response['errors'].append(f"edit_keyが重複しています: {', '.join(map(str, duplicated_keys))}")
+            return response
+
+        daily_plans = plan_result.get('daily_plans', {})
+        item_lookup: Dict[str, Dict[str, Any]] = {}
+        for date_str, day_plan in daily_plans.items():
+            for truck_plan in day_plan.get('trucks', []):
+                for item in truck_plan.get('loaded_items', []):
+                    key = str(item.get('edit_key', '')).strip()
+                    if not key or key in item_lookup:
+                        continue
+                    item_lookup[key] = {
+                        'date': date_str,
+                        'truck_plan': truck_plan,
+                        'item': item
+                    }
+
+        def _is_blank(value) -> bool:
+            if value is None:
+                return True
+            if isinstance(value, str):
+                return value.strip() == ''
+            return pd.isna(value)
+
+        def _normalize_int(value) -> Optional[int]:
+            if _is_blank(value):
+                return None
+            if isinstance(value, int):
+                return int(value)
+            if isinstance(value, float):
+                if math.isnan(value):
+                    return None
+                return int(round(value))
+            value_str = str(value).strip()
+            if value_str == '':
+                return None
+            try:
+                return int(round(float(value_str)))
+            except (TypeError, ValueError):
+                raise ValueError(f"数値に変換できません: {value}")
+
+        def _normalize_date(value) -> Optional[date]:
+            if _is_blank(value):
+                return None
+            if isinstance(value, datetime):
+                return value.date()
+            if isinstance(value, date):
+                return value
+            value_str = str(value).strip()
+            if value_str == '':
+                return None
+            try:
+                return datetime.strptime(value_str, "%Y-%m-%d").date()
+            except ValueError:
+                try:
+                    return pd.to_datetime(value_str).date()
+                except Exception as exc:
+                    raise ValueError(f"日付に変換できません: {value}") from exc
+
+        changes: List[Dict[str, Any]] = []
+        affected_trips = set()
+        now_str = datetime.now().isoformat()
+
+        for row in edit_df.to_dict('records'):
+            key = row.get('edit_key')
+            if key not in item_lookup:
+                response['errors'].append(f"edit_key {key} は現在の計画に存在しません。")
+                continue
+
+            entry = item_lookup[key]
+            item = entry['item']
+            truck_plan = entry['truck_plan']
+            change_fields: Dict[str, Dict[str, Any]] = {}
+
+            if 'num_containers' in row:
+                try:
+                    new_num = _normalize_int(row.get('num_containers'))
+                except ValueError as exc:
+                    response['errors'].append(f"{key} のnum_containers: {exc}")
+                    continue
+                if new_num is not None:
+                    if new_num < 0:
+                        response['errors'].append(f"{key} のnum_containersが負の値です。")
+                        continue
+                    if new_num != item.get('num_containers'):
+                        change_fields['num_containers'] = {
+                            'before': item.get('num_containers'),
+                            'after': new_num
+                        }
+                        item['num_containers'] = new_num
+
+            if 'total_quantity' in row:
+                try:
+                    new_qty = _normalize_int(row.get('total_quantity'))
+                except ValueError as exc:
+                    response['errors'].append(f"{key} のtotal_quantity: {exc}")
+                    continue
+                if new_qty is not None:
+                    if new_qty < 0:
+                        response['errors'].append(f"{key} のtotal_quantityが負の値です。")
+                        continue
+                    if new_qty != item.get('total_quantity'):
+                        change_fields['total_quantity'] = {
+                            'before': item.get('total_quantity'),
+                            'after': new_qty
+                        }
+                        item['total_quantity'] = new_qty
+
+            if 'delivery_date' in edit_df.columns:
+                try:
+                    new_date = _normalize_date(row.get('delivery_date'))
+                except ValueError as exc:
+                    response['errors'].append(f"{key} のdelivery_date: {exc}")
+                    continue
+                if new_date is not None:
+                    current = item.get('delivery_date')
+                    if isinstance(current, datetime):
+                        current = current.date()
+                    if current != new_date:
+                        change_fields['delivery_date'] = {
+                            'before': current,
+                            'after': new_date
+                        }
+                        item['delivery_date'] = new_date
+
+            if not change_fields:
+                continue
+
+            item['manual_adjusted'] = True
+            item['last_manual_update'] = now_str
+
+            changes.append({
+                'edit_key': key,
+                'loading_date': entry['date'],
+                'truck_name': truck_plan.get('truck_name'),
+                'product_code': item.get('product_code'),
+                'product_name': item.get('product_name'),
+                'changes': change_fields
+            })
+            affected_trips.add((entry['date'], truck_plan.get('truck_id'), truck_plan.get('trip_number')))
+
+        if changes:
+            self._recalculate_plan_utilizations(plan_result, list(affected_trips))
+            summary = plan_result.setdefault('summary', {})
+            summary['manual_adjusted'] = True
+            summary['manual_adjustment_count'] = len(changes)
+            metadata = plan_result.setdefault('metadata', {})
+            metadata['excel_adjusted_at'] = now_str
+            metadata['excel_adjusted_sheet'] = used_sheet
+            response['changes'] = changes
+        else:
+            if not response['errors']:
+                response['errors'].append("Excelの変更が検出されませんでした。")
+
+        return response
+
     def _find_unplanned_orders(self, orders_df: pd.DataFrame, plan_result: Dict[str, Any]) -> List[Dict[str, Any]]:
         """積載計画に含まれなかった受注を抽出"""
         if orders_df is None or orders_df.empty:
@@ -484,6 +1074,17 @@ class TransportService:
         orders['product_id'] = pd.to_numeric(orders['product_id'], errors='coerce')
         orders = orders.dropna(subset=['product_id', 'delivery_date'])
         orders['product_id'] = orders['product_id'].astype(int)
+        orders[quantity_col] = pd.to_numeric(orders[quantity_col], errors='coerce').fillna(0)
+
+        manual_available = 'manual_planning_quantity' in orders.columns
+        if manual_available:
+            orders['manual_planning_quantity'] = pd.to_numeric(
+                orders['manual_planning_quantity'], errors='coerce'
+            )
+            orders['target_quantity'] = orders['manual_planning_quantity'].combine_first(orders[quantity_col])
+        else:
+            orders['target_quantity'] = orders[quantity_col]
+        orders['target_quantity'] = orders['target_quantity'].fillna(0)
 
         planned_rows = []
         for plan in plan_result.get('daily_plans', {}).values():
@@ -517,18 +1118,21 @@ class TransportService:
             orders['loaded_quantity'] = 0
 
         orders['loaded_quantity'] = orders['loaded_quantity'].fillna(0)
-        orders['remaining_quantity'] = orders[quantity_col] - orders['loaded_quantity']
+        orders['remaining_quantity'] = orders['target_quantity'] - orders['loaded_quantity']
 
         unplanned = orders[orders['remaining_quantity'] > 0].copy()
         if unplanned.empty:
             return []
 
         column_order = []
-        for optional in ['order_id', 'instruction_id', 'product_code', 'product_name', 'customer_name']:
+        optional_fields = ['order_id', 'instruction_id', 'product_code', 'product_name', 'customer_name']
+        if manual_available:
+            optional_fields.append('manual_planning_quantity')
+        for optional in optional_fields:
             if optional in unplanned.columns:
                 column_order.append(optional)
 
-        required = ['product_id', 'delivery_date', quantity_col, 'loaded_quantity', 'remaining_quantity']
+        required = ['product_id', 'delivery_date', quantity_col, 'target_quantity', 'loaded_quantity', 'remaining_quantity']
         column_order.extend(required)
         # 重複を削除しつつ順序を維持
         seen = set()
