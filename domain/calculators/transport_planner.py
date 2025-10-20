@@ -4,6 +4,20 @@ from datetime import datetime, date, timedelta
 from collections import defaultdict
 import pandas as pd
 
+
+class TransportConstants:
+    """運送計画計算で使用する定数"""
+    # 単位変換
+    MM2_TO_M2 = 1_000_000  # mm²からm²への変換係数
+    MM3_TO_M3 = 1_000_000_000  # mm³からm³への変換係数
+    
+    # 閾値
+    LOW_UTILIZATION_THRESHOLD = 0.7  # 低稼働率トラックの閾値
+    
+    # 検索・処理の上限
+    MAX_WORKING_DAY_SEARCH = 7  # 営業日検索の最大日数
+    DEFAULT_PLANNING_DAYS = 7  # デフォルトの計画日数
+
 class TransportPlanner:
     """
     運送計画計算機 - 新ルール対応版
@@ -28,7 +42,7 @@ class TransportPlanner:
                                           trucks_df: pd.DataFrame,
                                           truck_container_rules: List[Any],
                                           start_date: date,
-                                          days: int = 7,
+                                          days: int = TransportConstants.DEFAULT_PLANNING_DAYS,
                                           calendar_repo=None) -> Dict[str, Any]:
         """新ルールに基づく積載計画作成"""
         self.calendar_repo = calendar_repo
@@ -190,7 +204,7 @@ class TransportPlanner:
         
         # デフォルトトラックの総底面積を計算（mm²をm²に変換）
         default_trucks = [t for _, t in truck_map.items() if t.get('default_use', False)]
-        default_total_floor_area = sum((t['width'] * t['depth']) / 1_000_000 for t in default_trucks)
+        default_total_floor_area = sum((t['width'] * t['depth']) / TransportConstants.MM2_TO_M2 for t in default_trucks)
         
         # 各受注を処理
         for _, order in orders_df.iterrows():
@@ -281,7 +295,7 @@ class TransportPlanner:
             total_quantity = quantity
             
             # 容器ごとの底面積計算（段積み考慮）
-            floor_area_per_container = (container.width * container.depth) / 1_000_000
+            floor_area_per_container = (container.width * container.depth) / TransportConstants.MM2_TO_M2
             max_stack = getattr(container, 'max_stack', 1)
             
             if max_stack > 1 and getattr(container, 'stackable', False):
@@ -304,7 +318,7 @@ class TransportPlanner:
             
             # 営業日チェック
             if self.calendar_repo:
-                for _ in range(7):
+                for _ in range(TransportConstants.MAX_WORKING_DAY_SEARCH):
                     if self.calendar_repo.is_working_day(primary_loading_date):
                         break
                     primary_loading_date -= timedelta(days=1)
@@ -380,7 +394,7 @@ class TransportPlanner:
             for truck_id, truck_info in available_trucks.items():
                 truck_loads[truck_id] = {
                     'floor_area': 0,
-                    'capacity': (truck_info['width'] * truck_info['depth']) / 1_000_000
+                    'capacity': (truck_info['width'] * truck_info['depth']) / TransportConstants.MM2_TO_M2
                 }
             # 当日の需要を各トラックに仮割り当て
             demands_to_forward = []
@@ -414,7 +428,7 @@ class TransportPlanner:
                         # 一部のみ積載可能 - 分割
                         container = container_map.get(demand['container_id'])
                         if container:
-                            floor_area_per_container = (container.width * container.depth) / 1_000_000
+                            floor_area_per_container = (container.width * container.depth) / TransportConstants.MM2_TO_M2
                             max_stack = getattr(container, 'max_stack', 1)
                             # 段積み考慮で積載可能な容器数を計算
                             if max_stack > 1 and getattr(container, 'stackable', False):
@@ -488,7 +502,7 @@ class TransportPlanner:
         # トラック状態を初期化（mm²をm²に変換）
         truck_states = {}
         for truck_id, truck_info in available_trucks.items():
-            truck_floor_area = (truck_info['width'] * truck_info['depth']) / 1_000_000
+            truck_floor_area = (truck_info['width'] * truck_info['depth']) / TransportConstants.MM2_TO_M2
             truck_states[truck_id] = {
                 'truck_id': truck_id,
                 'truck_name': truck_info['name'],
@@ -565,7 +579,7 @@ class TransportPlanner:
                     container = container_map.get(container_id)
                     if container and getattr(container, 'stackable', False):
                         max_stack = getattr(container, 'max_stack', 1)
-                        floor_area_per_container = (container.width * container.depth) / 1_000_000
+                        floor_area_per_container = (container.width * container.depth) / TransportConstants.MM2_TO_M2
                         # 既存の容器数を計算（同じ容器IDの全製品）
                         existing_containers = sum(item['num_containers'] for item in same_container_items)
                         new_total_containers = existing_containers + remaining_demand['num_containers']
@@ -602,7 +616,7 @@ class TransportPlanner:
                     # 一部積載可能（分割）
                     container = container_map.get(remaining_demand['container_id'])
                     if container:
-                        floor_area_per_container = (container.width * container.depth) / 1_000_000
+                        floor_area_per_container = (container.width * container.depth) / TransportConstants.MM2_TO_M2
                         max_stack = getattr(container, 'max_stack', 1)
                         # 段積み考慮で積載可能な容器数を計算
                         if max_stack > 1 and getattr(container, 'stackable', False):
@@ -674,7 +688,7 @@ class TransportPlanner:
                                 break
             # ✅ フォールバック: 低稼働率トラックへの再配置
             if not loaded and remaining_demand['num_containers'] > 0:
-                low_utilization_threshold = 0.7
+                low_utilization_threshold = TransportConstants.LOW_UTILIZATION_THRESHOLD
                 fallback_candidates = [
                     state for state in truck_states.values()
                     if state['total_floor_area'] > 0 and
@@ -687,7 +701,7 @@ class TransportPlanner:
                     candidate_container = container_map.get(remaining_demand['container_id'])
                     if not candidate_container:
                         continue
-                    floor_area_per_container = (candidate_container.width * candidate_container.depth) / 1_000_000
+                    floor_area_per_container = (candidate_container.width * candidate_container.depth) / TransportConstants.MM2_TO_M2
                     if floor_area_per_container <= 0:
                         continue
                     max_stack = getattr(candidate_container, 'max_stack', 1)
@@ -985,12 +999,12 @@ class TransportPlanner:
                 # このトラックが使用可能かチェック
                 if truck_id not in available_trucks:
                     continue
-                # このトラックの状態を確認（mm²をm²に変換）
+                # このトラックの状態を確認
                 truck_info = truck_map[truck_id]
                 if not self._can_arrive_on_time(truck_info, target_date, demand.get('delivery_date')):
                     continue
                 truck_name = truck_info['name']
-                truck_floor_area = (truck_info['width'] * truck_info['depth']) / 1_000_000
+                truck_floor_area = (truck_info['width'] * truck_info['depth']) / TransportConstants.MM2_TO_M2
                 # 既存のトラックプランを探す
                 target_truck_plan = None
                 for truck_plan in day_plan['trucks']:
@@ -1129,7 +1143,7 @@ class TransportPlanner:
                     truck_info = truck_map[truck_id]
                     if not self._can_arrive_on_time(truck_info, prev_date, demand.get('delivery_date')):
                         continue
-                    truck_floor_area = (truck_info['width'] * truck_info['depth']) / 1_000_000
+                    truck_floor_area = (truck_info['width'] * truck_info['depth']) / TransportConstants.MM2_TO_M2
                     # 既存のトラックプランを探す
                     target_truck_plan = None
                     for truck_plan in prev_plan['trucks']:
@@ -1219,8 +1233,8 @@ class TransportPlanner:
 
     def _recalculate_utilization(self, truck_plan, truck_info, container_map):
         """トラックの積載率を再計算（mm²をm²に変換）"""
-        truck_floor_area = (truck_info['width'] * truck_info['depth']) / 1_000_000
-        truck_volume = (truck_info['width'] * truck_info['depth'] * truck_info['height']) / 1_000_000_000
+        truck_floor_area = (truck_info['width'] * truck_info['depth']) / TransportConstants.MM2_TO_M2
+        truck_volume = (truck_info['width'] * truck_info['depth'] * truck_info['height']) / TransportConstants.MM3_TO_M3
         truck_max_weight = truck_info['max_weight']
         loaded_area = 0
         loaded_volume = 0
@@ -1240,7 +1254,7 @@ class TransportPlanner:
                 container_totals[container_id] = {
                     'num_containers': 0,
                     'floor_area_per_container': item['floor_area_per_container'],
-                    'volume_per_container': (container.width * container.depth * container.height) / 1_000_000_000,
+                    'volume_per_container': (container.width * container.depth * container.height) / TransportConstants.MM3_TO_M3,
                     'weight_per_container': container.max_weight,
                     'stackable': container.stackable,
                     'max_stack': container.max_stack
@@ -1301,7 +1315,7 @@ class TransportPlanner:
                     truck_info = truck_map[truck_id]
                     if not self._can_arrive_on_time(truck_info, current_date, demand.get('delivery_date')):
                         continue
-                    truck_floor_area = (truck_info['width'] * truck_info['depth']) / 1_000_000
+                    truck_floor_area = (truck_info['width'] * truck_info['depth']) / TransportConstants.MM2_TO_M2
                     # 前日のこのトラックの状態を確認
                     target_truck_plan = None
                     for truck_plan in current_plan['trucks']:
@@ -1430,7 +1444,7 @@ class TransportPlanner:
                 
                 # 非営業日の場合、営業日を遡る
                 if self.calendar_repo:
-                    max_attempts = 7  # 最大7日遡る
+                    max_attempts = TransportConstants.MAX_WORKING_DAY_SEARCH  # 最大7日遡る
                     for _ in range(max_attempts):
                         if self.calendar_repo.is_working_day(prev_date):
                             break
