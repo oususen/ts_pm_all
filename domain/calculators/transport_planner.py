@@ -803,8 +803,7 @@ class TransportPlanner:
                     'loaded_items': truck_state['loaded_items'],
                     'utilization': {
                         'floor_area_rate': utilization_rate,
-                        'volume_rate': utilization_rate,
-                        'weight_rate': 0
+                        'volume_rate': utilization_rate
                     }
                 }
                 final_truck_plans.append(truck_plan)
@@ -1065,8 +1064,7 @@ class TransportPlanner:
                             'loaded_items': [loaded_item],
                             'utilization': {
                                 'floor_area_rate': new_utilization_rate,
-                                'volume_rate': new_utilization_rate,
-                                'weight_rate': 0
+                                'volume_rate': new_utilization_rate
                             }
                         }
                         day_plan['trucks'].append(new_truck_plan)
@@ -1189,7 +1187,7 @@ class TransportPlanner:
                                 'truck_id': truck_id,
                                 'truck_name': truck_info['name'],
                                 'loaded_items': [],
-                                'utilization': {'floor_area_rate': 0, 'volume_rate': 0, 'weight_rate': 0}
+                                'utilization': {'floor_area_rate': 0, 'volume_rate': 0}
                             }
                             prev_plan['trucks'].append(target_truck_plan)
                             prev_plan['total_trips'] = len(prev_plan['trucks'])
@@ -1235,10 +1233,8 @@ class TransportPlanner:
         """トラックの積載率を再計算（mm²をm²に変換）"""
         truck_floor_area = (truck_info['width'] * truck_info['depth']) / TransportConstants.MM2_TO_M2
         truck_volume = (truck_info['width'] * truck_info['depth'] * truck_info['height']) / TransportConstants.MM3_TO_M3
-        truck_max_weight = truck_info['max_weight']
         loaded_area = 0
         loaded_volume = 0
-        loaded_weight = 0
         container_totals = {}
         # 数量検証しながら集計
         for item in truck_plan['loaded_items']:
@@ -1255,7 +1251,6 @@ class TransportPlanner:
                     'num_containers': 0,
                     'floor_area_per_container': item['floor_area_per_container'],
                     'volume_per_container': (container.width * container.depth * container.height) / TransportConstants.MM3_TO_M3,
-                    'weight_per_container': container.max_weight,
                     'stackable': container.stackable,
                     'max_stack': container.max_stack
                 }
@@ -1270,11 +1265,9 @@ class TransportPlanner:
                 container_area = info['floor_area_per_container'] * info['num_containers']
             loaded_area += container_area
             loaded_volume += info['volume_per_container'] * info['num_containers']
-            loaded_weight += info['weight_per_container'] * info['num_containers']
         truck_plan['utilization'] = {
             'floor_area_rate': round(loaded_area / truck_floor_area * 100, 1) if truck_floor_area > 0 else 0,
-            'volume_rate': round(loaded_volume / truck_volume * 100, 1) if truck_volume > 0 else 0,
-            'weight_rate': round(loaded_weight / truck_max_weight * 100, 1) if truck_max_weight > 0 else 0
+            'volume_rate': round(loaded_volume / truck_volume * 100, 1) if truck_volume > 0 else 0
         }
 
     def _relocate_to_next_days(self, daily_plans, truck_map, container_map, 
@@ -1361,7 +1354,7 @@ class TransportPlanner:
                                 'truck_id': truck_id,
                                 'truck_name': truck_info['name'],
                                 'loaded_items': [],
-                                'utilization': {'floor_area_rate': 0, 'volume_rate': 0, 'weight_rate': 0}
+                                'utilization': {'floor_area_rate': 0, 'volume_rate': 0}
                             }
                             current_plan['trucks'].append(target_truck_plan)
                             current_plan['total_trips'] = len(current_plan['trucks'])

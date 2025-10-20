@@ -144,12 +144,11 @@ class ExcelExportService:
                             ws.cell(row=row_idx, column=7, value=str(delivery_date))
                     
                     ws.cell(row=row_idx, column=8, value=f"{utilization['volume_rate']}%")
-                    ws.cell(row=row_idx, column=9, value=f"{utilization['weight_rate']}%")
                     
                     row_idx += 1
             
             # 列幅調整
-            for col in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']:
+            for col in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']:
                 ws.column_dimensions[col].width = 15
     
     def _create_warnings_sheet(self, wb: Workbook, plan_result: Dict):

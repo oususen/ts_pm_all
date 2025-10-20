@@ -86,7 +86,7 @@ class LoadingPlanRepository:
                             'is_advanced': is_advanced,
                             'original_date': item.get('original_date'),
                             'volume_util': truck_plan['utilization']['volume_rate'],
-                            'weight_util': truck_plan['utilization']['weight_rate']
+                            'weight_util': 0
                         })
                         
                         # ✅ delivery_progress更新用データを収集
@@ -340,7 +340,7 @@ class LoadingPlanRepository:
                         'loaded_items': [],
                         'utilization': {
                             'volume_rate': float(detail_dict.get('volume_utilization', 0)),
-                            'weight_rate': float(detail_dict.get('weight_utilization', 0))
+                            'weight_rate': 0
                         }
                     }
                     daily_plans[date_str]['trucks'].append(truck)

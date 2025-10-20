@@ -505,8 +505,7 @@ class TransportService:
                     '容器数': '',
                     '合計数量': '',
                     '納期': '',
-                    '体積積載率': '',
-                    '重量積載率': ''
+                    '体積積載率': ''
                 })
             
             prev_date = date_str
@@ -530,7 +529,6 @@ class TransportService:
                         '合計数量': item.get('total_quantity', 0),
                         '納期': item['delivery_date'].strftime('%Y-%m-%d') if 'delivery_date' in item else '',
                         '体積積載率(%)': truck['utilization']['volume_rate'],
-                        '重量積載率(%)': truck['utilization']['weight_rate'],
                         '前倒し配送': advanced_mark
                     })
         
@@ -767,12 +765,10 @@ class TransportService:
 
             loaded_area += totals['per_area'] * used_slots
             loaded_volume += totals['per_volume'] * num
-            loaded_weight += totals['per_weight'] * num
 
         utilization = truck_plan.setdefault('utilization', {})
         utilization['floor_area_rate'] = round(loaded_area / truck_floor_area * 100, 1) if truck_floor_area > 0 else 0
         utilization['volume_rate'] = round(loaded_volume / truck_volume * 100, 1) if truck_volume > 0 else 0
-        utilization['weight_rate'] = round(loaded_weight / max_weight * 100, 1) if max_weight > 0 else 0
 
     def export_loading_plan_to_csv(self, plan_result: Dict[str, Any]) -> str:
         """積載計画をCSV形式で出力"""
@@ -797,7 +793,6 @@ class TransportService:
                         '合計数量': item.get('total_quantity', 0),
                         '納期': item['delivery_date'].strftime('%Y-%m-%d') if 'delivery_date' in item else '',
                         '体積積載率(%)': truck['utilization']['volume_rate'],
-                        '重量積載率(%)': truck['utilization']['weight_rate'],
                         '前倒し配送': advanced_mark
                     })
         

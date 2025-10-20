@@ -88,13 +88,7 @@ class TransportPage:
                         help="段積みを考慮した、実際に積載可能な容器の総数（列数×段数×列本数ではなく最終的な本数）"
                     )
                 with col5:
-                    stack_count = st.number_input(
-                        "段積み数(任意)",
-                        min_value=0,
-                        value=0,
-                        step=1,
-                        help="同一列に重ねる段数。未設定の場合は容器のmax_stackを利用"
-                    )
+                    pass
 
                 submitted = st.form_submit_button("保存", type="primary")
                 if submitted:
@@ -108,8 +102,6 @@ class TransportPage:
                                 'max_quantity': int(max_quantity),
                                 'priority': int(priority)
                             }
-                            if stack_count and int(stack_count) > 0:
-                                data['stack_count'] = int(stack_count)
                             self.service.save_truck_container_rule(data)
                             st.success("ルールを保存しました")
                             st.rerun()
@@ -128,7 +120,6 @@ class TransportPage:
                         'トラック名': truck_id_to_name.get(r.get('truck_id'), r.get('truck_id')),
                         '容器名': container_id_to_name.get(r.get('container_id'), r.get('container_id')),
                         '最大積載容器数（段積み後）': r.get('max_quantity'),  # editable
-                        '段積み数': r.get('stack_count'),          # editable
                         '優先度': r.get('priority', 0),            # editable
                     })
                 df = pd.DataFrame(display)
@@ -142,7 +133,6 @@ class TransportPage:
                         'トラック名': st.column_config.TextColumn('トラック名', disabled=True),
                         '容器名': st.column_config.TextColumn('容器名', disabled=True),
                         '最大積載容器数（段積み後）': st.column_config.NumberColumn('最大積載容器数（段積み後）', min_value=0, step=1, help="段積みを考慮した実容器本数"),
-                        '段積み数': st.column_config.NumberColumn('段積み数', min_value=0, step=1),
                         '優先度': st.column_config.NumberColumn('優先度', min_value=0, step=1),
                     },
                     key="tcr_editor"
@@ -157,7 +147,6 @@ class TransportPage:
                             after = edited_df.iloc[idx]
                             if (
                                 before['最大積載容器数（段積み後）'] != after['最大積載容器数（段積み後）'] or
-                                before['段積み数'] != after['段積み数'] or
                                 before['優先度'] != after['優先度']
                             ):
                                 rid = int(after['id']) if pd.notna(after['id']) else None
@@ -166,10 +155,6 @@ class TransportPage:
                                 update_data = {}
                                 if before['最大積載容器数（段積み後）'] != after['最大積載容器数（段積み後）']:
                                     update_data['max_quantity'] = int(after['最大積載容器数（段積み後）'] or 0)
-                                if before['段積み数'] != after['段積み数']:
-                                    # None/NaN 対応
-                                    val = after['段積み数']
-                                    update_data['stack_count'] = int(val) if pd.notna(val) else None
                                 if before['優先度'] != after['優先度']:
                                     update_data['priority'] = int(after['優先度'] or 0)
                                 if update_data:
@@ -808,8 +793,7 @@ class TransportPage:
                             '容器数': item.get('num_containers', 0),
                             '合計数量': item.get('total_quantity', 0),
                             '納期': delivery_date_str,
-                            '体積率(%)': utilization.get('volume_rate', 0),
-                            '重量率(%)': utilization.get('weight_rate', 0)
+                            '体積率(%)': utilization.get('volume_rate', 0)
                         })
             
             if all_plan_data:
@@ -825,7 +809,7 @@ class TransportPage:
                 plan_df,
                 use_container_width=True,
                 hide_index=True,
-                disabled=['積載日', 'トラック', '容器数', '体積率(%)', '重量率(%)'],  # 容器数と積載率を編集不可に
+                disabled=['積載日', 'トラック', '容器数', '体積率(%)'],  # 容器数と積載率を編集不可に
                 column_config={
                     "積載日": st.column_config.TextColumn("積載日"),
                     "トラック": st.column_config.TextColumn("トラック"),
@@ -834,8 +818,7 @@ class TransportPage:
                     "容器数": st.column_config.NumberColumn("容器数", min_value=0, step=1, disabled=True),
                     "合計数量": st.column_config.NumberColumn("合計数量", min_value=0, step=1),
                     "納期": st.column_config.TextColumn("納期"),
-                    "体積率(%)": st.column_config.NumberColumn("体積率(%)", format="%d%%", disabled=True),
-                    "重量率(%)": st.column_config.NumberColumn("重量率(%)", format="%d%%", disabled=True)
+                    "体積率(%)": st.column_config.NumberColumn("体積率(%)", format="%d%%", disabled=True)
                 },
                 key=f"plan_editor_{plan_data.get('id', 'current')}"
             )
@@ -922,7 +905,6 @@ class TransportPage:
                             
                             # 積載率計算
                             volume_rate = min(100, (util_data['total_volume'] / truck_volume) * 100) if truck_volume > 0 else 0
-                            weight_rate = min(100, (util_data['total_weight'] / truck_max_weight) * 100) if truck_max_weight > 0 else 0
                             
                             # ✅ 該当トラックの行だけに積載率を反映
                             for df_idx in range(len(edited_df)):
@@ -934,10 +916,9 @@ class TransportPage:
                                         date_str == util_data['date_str'] and 
                                         truck_idx == util_data['truck_idx']):
                                         edited_df.at[df_idx, '体積率(%)'] = round(volume_rate, 1)
-                                        edited_df.at[df_idx, '重量率(%)'] = round(weight_rate, 1)
                             
                             # デバッグ情報（必要に応じて）
-                            st.write(f"🚛 トラック {truck_id}: 体積率 {volume_rate:.1f}%, 重量率 {weight_rate:.1f}%")
+                            st.write(f"🚛 トラック {truck_id}: 体積率 {volume_rate:.1f}%")
                     
                 except Exception as e:
                     st.error(f"積載率計算エラー: {e}")
@@ -1224,7 +1205,6 @@ class TransportPage:
                                 '合計数量': '',
                                 '納期': '',
                                 '体積積載率(%)': '',
-                                '重量積載率(%)': '',
                                 '前倒し配送': ''
                             })
                         
@@ -1255,7 +1235,6 @@ class TransportPage:
                                     '合計数量': item.get('total_quantity', 0),
                                     '納期': delivery_date_str,
                                     '体積積載率(%)': utilization.get('volume_rate', 0),
-                                    '重量積載率(%)': utilization.get('weight_rate', 0),
                                     '前倒し配送': '○' if item.get('is_advanced', False) else '×'
                                 })
                     
@@ -1343,13 +1322,11 @@ class TransportPage:
                     st.json(truck_plan)
                     
                     util = truck_plan.get('utilization', {})
-                    col_u1, col_u2, col_u3 = st.columns(3)
+                    col_u1, col_u2 = st.columns(2)
                     with col_u1:
                         st.metric("床面積積載率", f"{util.get('floor_area_rate', 0)}%")
                     with col_u2:
                         st.metric("体積積載率", f"{util.get('volume_rate', 0)}%")
-                    with col_u3:
-                        st.metric("重量積載率", f"{util.get('weight_rate', 0)}%")
                     
                     loaded_items = truck_plan.get('loaded_items', [])
                     
@@ -1411,8 +1388,7 @@ class TransportPage:
                         '容器数': item.get('num_containers', 0),
                         '合計数量': item.get('total_quantity', 0),
                         '納期': delivery_date_str,
-                        '体積率': f"{utilization.get('volume_rate', 0)}%",
-                        '重量率': f"{utilization.get('weight_rate', 0)}%"
+                        '体積率': f"{utilization.get('volume_rate', 0)}%"
                     })
         
         if all_items:
@@ -1645,18 +1621,15 @@ class TransportPage:
                 
                 # 数量または積載率が変更された場合
                 if (original_row['合計数量'] != edited_row['合計数量'] or
-                    original_row['体積率(%)'] != edited_row['体積率(%)'] or
-                    original_row['重量率(%)'] != edited_row['重量率(%)']):
+                    original_row['体積率(%)'] != edited_row['体積率(%)']):
                     
                     changes['total_quantity'] = edited_row['合計数量']
                     changes['num_containers'] = edited_row['容器数']
                     changes['volume_utilization'] = edited_row['体積率(%)']
-                    changes['weight_utilization'] = edited_row['重量率(%)']
                     
                     old_values['total_quantity'] = original_row['合計数量']
                     old_values['num_containers'] = original_row['容器数']
                     old_values['volume_utilization'] = original_row['体積率(%)']
-                    old_values['weight_utilization'] = original_row['重量率(%)']
                 
                 if changes:
                     changes_detected = True
