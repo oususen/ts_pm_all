@@ -169,10 +169,6 @@ class LoadingPlanRepository:
                     update_sql = text("""
                         UPDATE delivery_progress
                         SET planned_quantity = :planned_quantity,
-                            order_quantity = CASE 
-                                WHEN (order_quantity IS NULL OR order_quantity = 0) THEN :planned_quantity
-                                ELSE order_quantity
-                            END,
                             status = CASE 
                                 WHEN shipped_quantity >= order_quantity THEN '出荷完了'
                                 WHEN shipped_quantity > 0 THEN '一部出荷'
