@@ -86,7 +86,27 @@ class DeliveryProgressPage:
             progress_df = self.service.get_delivery_progress(start_date, end_date)
 
             with st.expander("計画進度の再計算"):
-                product_id = st.number_input("製品ID", min_value=1, step=1)
+                # 製品リストを取得
+                try:
+                    products = self.service.product_repo.get_all_products()
+                    if not products.empty:
+                        product_options = {
+                            f"{row['product_code']} - {row['product_name']}": row['id']
+                            for _, row in products.iterrows()
+                        }
+                        selected_product = st.selectbox(
+                            "製品コード",
+                            options=list(product_options.keys()),
+                            key="recalc_product_select"
+                        )
+                        product_id = product_options[selected_product]
+                    else:
+                        st.warning("製品が登録されていません")
+                        product_id = None
+                except:
+                    st.error("製品データ取得エラー")
+                    product_id = None
+
                 recal_start_date = st.date_input("再計算開始日")
                 recal_end_date = st.date_input("再計算終了日")
 
@@ -94,17 +114,40 @@ class DeliveryProgressPage:
 
                 with col_recalc_single:
                     if st.button("選択製品のみ再計算"):
-                        self.service.recompute_planned_progress(product_id, recal_start_date, recal_end_date)
-                        st.success("再計算が完了しました")
+                        if product_id:
+                            self.service.recompute_planned_progress(product_id, recal_start_date, recal_end_date)
+                            st.success("再計算が完了しました")
+                        else:
+                            st.error("製品を選択してください")
 
                 with col_recalc_all:
                     if st.button("全製品を再計算"):
                         self.service.recompute_planned_progress_all(recal_start_date, recal_end_date)
                         st.success("全ての製品に対する再計算が完了しました")
-            
+
             # ▼ ここから追加：実績進度（shipped_remaining_quantity）の再計算
             with st.expander("実績進度の再計算（shipped_remaining_quantity）"):
-                sr_product_id = st.number_input("製品ID（実績）", min_value=1, step=1, key="sr_product_id")
+                # 製品リストを取得
+                try:
+                    products = self.service.product_repo.get_all_products()
+                    if not products.empty:
+                        sr_product_options = {
+                            f"{row['product_code']} - {row['product_name']}": row['id']
+                            for _, row in products.iterrows()
+                        }
+                        sr_selected_product = st.selectbox(
+                            "製品コード",
+                            options=list(sr_product_options.keys()),
+                            key="sr_product_select"
+                        )
+                        sr_product_id = sr_product_options[sr_selected_product]
+                    else:
+                        st.warning("製品が登録されていません")
+                        sr_product_id = None
+                except:
+                    st.error("製品データ取得エラー")
+                    sr_product_id = None
+
                 sr_start_date = st.date_input("再計算開始日（実績）", key="sr_start_date")
                 sr_end_date = st.date_input("再計算終了日（実績）", key="sr_end_date")
 
@@ -112,8 +155,11 @@ class DeliveryProgressPage:
 
                 with col_sr_one:
                     if st.button("選択製品の実績進度を再計算", key="btn_sr_one"):
-                        self.service.recompute_shipped_remaining(sr_product_id, sr_start_date, sr_end_date)
-                        st.success("実績進度の再計算が完了しました")
+                        if sr_product_id:
+                            self.service.recompute_shipped_remaining(sr_product_id, sr_start_date, sr_end_date)
+                            st.success("実績進度の再計算が完了しました")
+                        else:
+                            st.error("製品を選択してください")
 
                 with col_sr_all:
                     if st.button("全製品の実績進度を再計算", key="btn_sr_all"):
@@ -164,52 +210,9 @@ class DeliveryProgressPage:
                         progress_df.get('order_quantity', 0).fillna(0)
                     )
 
-                    # 表示用データフレーム
-                    display_columns = ['urgency', 'product_code', 'product_name',
-                                     'delivery_date', 'order_quantity']
-
-                    if 'manual_planning_quantity' in progress_df.columns:
-                        display_columns.append('manual_planning_quantity')
-
-                    # planned_quantityカラムがあれば追加
-                    if 'planned_quantity' in progress_df.columns:
-                        display_columns.append('planned_quantity')
-
-                    # 計画進度と進度を追加
-                    display_columns.extend(['planned_progress', 'shipped_quantity', 'actual_progress', 'remaining_quantity', 'status'])
-
-                    display_df = progress_df[display_columns].copy()
-
-                    # カラム名を日本語に変更
-                    column_names = {
-                        'urgency': '緊急度',
-                        'product_code': '製品コード',
-                        'product_name': '製品名',
-                        'delivery_date': '納期',
-                        'order_quantity': '受注数',
-                        'manual_planning_quantity': '手動計画',
-                        'planned_quantity': '計画数',
-                        'planned_progress': '計画進度',
-                        'shipped_quantity': '出荷済',
-                        'actual_progress': '進度',
-                        'remaining_quantity': '残数',
-                        'status': 'ステータス'
-                    }
-                    
-                    display_df.columns = [column_names.get(col, col) for col in display_df.columns]
-                    
-                    st.dataframe(
-                        display_df,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "納期": st.column_config.DateColumn("納期", format="YYYY-MM-DD"),
-                        }
-                    )
-                    
                     st.subheader("🖊️ 手動計画数量の一括編集")
-                    # 上の一覧表示と同じ列構成にする
-                    editor_columns = ['id', 'urgency', 'product_code', 'product_name', 'delivery_date', 'order_quantity']
+                    # 上の一覧表示と同じ列構成にする（IDなし）
+                    editor_columns = ['urgency', 'product_code', 'product_name', 'delivery_date', 'order_quantity']
 
                     if 'manual_planning_quantity' in progress_df.columns:
                         editor_columns.append('manual_planning_quantity')
@@ -218,7 +221,9 @@ class DeliveryProgressPage:
 
                     editor_columns.extend(['planned_progress', 'shipped_quantity', 'actual_progress', 'remaining_quantity', 'status'])
 
+                    # IDは保存処理のために別途保持
                     editor_source = progress_df[editor_columns].copy()
+                    editor_source.insert(0, 'id', progress_df['id'])
                     editor_source = editor_source.reset_index(drop=True)
 
                     original_editor = editor_source.copy()
@@ -227,13 +232,14 @@ class DeliveryProgressPage:
                     if 'manual_planning_quantity' in editor_source.columns:
                         editor_source['manual_planning_quantity'] = editor_source['manual_planning_quantity'].astype('Float64')
 
+                    # ID列を非表示にして12列で表示
                     edited_table = st.data_editor(
                         editor_source,
                         num_rows="fixed",
                         hide_index=True,
                         use_container_width=True,
                         column_config={
-                            'id': st.column_config.NumberColumn('ID', format='%d'),
+                            'id': None,  # ID列を非表示
                             'urgency': st.column_config.TextColumn('緊急度'),
                             'product_code': st.column_config.TextColumn('製品コード'),
                             'product_name': st.column_config.TextColumn('製品名'),
@@ -247,7 +253,7 @@ class DeliveryProgressPage:
                             'remaining_quantity': st.column_config.NumberColumn('残数', format='%d'),
                             'status': st.column_config.TextColumn('ステータス'),
                         },
-                        disabled=['id', 'urgency', 'product_code', 'product_name', 'delivery_date', 'order_quantity', 'planned_quantity', 'planned_progress', 'shipped_quantity', 'actual_progress', 'remaining_quantity', 'status'],
+                        disabled=['urgency', 'product_code', 'product_name', 'delivery_date', 'order_quantity', 'planned_quantity', 'planned_progress', 'shipped_quantity', 'actual_progress', 'remaining_quantity', 'status'],
                         key="manual_plan_editor",
                     )
                     st.caption("手動計画列のみ編集できます。空欄にすると自動計画に戻ります。")
