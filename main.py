@@ -31,7 +31,7 @@ class ProductionPlanningApp:
             "CSV受注取込": CSVImportPage(self.db),  # 追加
             "製品管理": ProductPage(self.production_service, self.transport_service),
             "制限設定": ConstraintsPage(self.production_service),
-            "生産計画": ProductionPage(self.production_service),
+            "生産計画": ProductionPage(self.production_service, self.transport_service),
             "配送便計画": TransportPage(self.transport_service),
             "納入進度": DeliveryProgressPage(self.transport_service),
             "📅 会社カレンダー": CalendarPage(self.db),  # ✅ 追加
