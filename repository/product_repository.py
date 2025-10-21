@@ -56,11 +56,12 @@ class ProductRepository:
         try:
             query = """
             SELECT 
-                id, product_code, product_name, 
+                id, product_code, product_name,
+                display_id,
                 used_container_id, used_truck_ids,
                 capacity, inspection_category, can_advance
             FROM products
-            ORDER BY product_code
+            ORDER BY COALESCE(display_id, 0), product_code
             """
             
             result = self.db.execute_query(query)

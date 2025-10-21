@@ -1251,7 +1251,7 @@ class DeliveryProgressPage:
 
 
         st.subheader("📋 製品別マトリクス")
-        matrix_df = self._create_internal_order_matrix(progress_df)
+        matrix_df = self._create_internal_order_matrix(progress_df, start_date, end_date)
         if matrix_df.empty:
             st.info("表示対象データがありません。")
             return
@@ -1274,11 +1274,48 @@ class DeliveryProgressPage:
             key="internal_order_excel_download"
         )
 
-    def _create_internal_order_matrix(self, progress_df: pd.DataFrame) -> pd.DataFrame:
+    def _create_internal_order_matrix(self, progress_df: pd.DataFrame, start_date: date, end_date: date) -> pd.DataFrame:
         """製品×納期のマトリクスを作成"""
-        product_codes = sorted(progress_df['product_code'].dropna().unique())
-        dates = sorted(progress_df['delivery_date'].dropna().unique())
-        date_columns = [d.strftime('%Y-%m-%d') for d in dates]
+        order_map = {}
+        name_map = {}
+        if hasattr(self.service, "product_repo"):
+            try:
+                master_df = self.service.product_repo.get_all_products()
+            except Exception:
+                master_df = pd.DataFrame()
+            else:
+                if isinstance(master_df, pd.DataFrame) and not master_df.empty:
+                    temp_order = {}
+                    temp_name = {}
+                    for _, row in master_df.iterrows():
+                        code = row.get('product_code')
+                        if not code:
+                            continue
+                        display_val = row.get('display_id')
+                        if pd.notna(display_val):
+                            try:
+                                display_val = int(display_val)
+                            except (TypeError, ValueError):
+                                pass
+                        else:
+                            display_val = None
+                        temp_order[code] = display_val
+                        temp_name[code] = row.get('product_name', '')
+                    order_map = temp_order
+                    name_map = temp_name
+
+        product_codes = progress_df['product_code'].dropna().unique().tolist()
+
+        def sort_key(code: str):
+            display_value = order_map.get(code) if order_map else None
+            if display_value is None or pd.isna(display_value):
+                display_value = float('inf')
+            return (display_value, code)
+
+        product_codes.sort(key=sort_key)
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        date_columns = [d.strftime('%Y/%m/%d') for d in date_range]
+        date_values = [d.date() for d in date_range]
 
         matrix_data = []
         for product_code in product_codes:
@@ -1286,13 +1323,15 @@ class DeliveryProgressPage:
             if product_data.empty:
                 continue
 
-            product_name = product_data['product_name'].iloc[0] if 'product_name' in product_data.columns else ''
+            product_name = name_map.get(product_code)
+            if not product_name:
+                product_name = product_data['product_name'].iloc[0] if 'product_name' in product_data.columns else ''
             row = {
                 '製品コード': product_code,
                 '製品名': product_name
             }
 
-            for date_obj, date_str in zip(dates, date_columns):
+            for date_obj, date_str in zip(date_values, date_columns):
                 day_data = product_data[product_data['delivery_date'] == date_obj]
                 if not day_data.empty:
                     planned_qty = pd.to_numeric(day_data['planned_quantity'], errors='coerce').fillna(0).sum()
@@ -1349,7 +1388,7 @@ class DeliveryProgressPage:
                 worksheet.column_dimensions[col_letter].width = 12
 
             worksheet.insert_rows(1)
-            worksheet['A1'] = f"社内注文 マトリクス（{start_date.strftime('%Y年%m月%d日')} ～ {end_date.strftime('%Y年%m月%d日')}）"
+            worksheet['A1'] = f"社内注文 マトリクス（{start_date.strftime('%Y/%m/%d')} ～ {end_date.strftime('%Y/%m/%d')}）"
             worksheet['A1'].font = Font(bold=True, size=14)
             worksheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=worksheet.max_column)
             worksheet['A1'].alignment = center_alignment
