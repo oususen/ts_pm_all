@@ -3,6 +3,9 @@ import streamlit as st
 import pandas as pd
 from datetime import date, timedelta, datetime
 from typing import Dict, Optional, Any
+from io import BytesIO
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 class DeliveryProgressPage:
     """納入進度管理ページ"""
@@ -30,7 +33,13 @@ class DeliveryProgressPage:
         if not can_edit:
             st.warning("⚠️ この画面の編集権限がありません。閲覧のみ可能です。")
 
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 進度一覧", "✅ 実績登録", "➕ 新規登録", "📦 出荷実績"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📊 進度一覧",
+            "✅ 実績登録",
+            "➕ 新規登録",
+            "📦 出荷実績",
+            "🏭 社内注文"
+        ])
 
         with tab1:
             self._show_progress_list(can_edit)
@@ -40,6 +49,8 @@ class DeliveryProgressPage:
             self._show_progress_registration(can_edit)
         with tab4:
             self._show_shipment_records()
+        with tab5:
+            self._show_internal_orders()
     
     def _show_progress_list(self, can_edit):
         """進度一覧表示"""
@@ -1188,3 +1199,160 @@ class DeliveryProgressPage:
         
         except Exception as e:
             st.error(f"出荷実績取得エラー: {e}")
+
+    def _show_internal_orders(self):
+        """社内注文（製造工程）タブ"""
+        st.header("🏭 社内注文")
+        st.write("積載計画で設定された数量を社内向けの加工指示として確認できます。")
+
+        st.markdown("---")
+        st.subheader("📅 表示期間")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            start_date = st.date_input(
+                "開始日",
+                value=date.today(),
+                key="internal_order_start_date"
+            )
+
+        with col2:
+            end_date = st.date_input(
+                "終了日",
+                value=date.today() + timedelta(days=7),
+                key="internal_order_end_date"
+            )
+
+        if start_date > end_date:
+            st.error("開始日は終了日以前の日付を選択してください。")
+            return
+
+        try:
+            progress_df = self.service.get_delivery_progress(start_date, end_date)
+        except Exception as e:
+            st.error(f"データ取得エラー: {e}")
+            return
+
+        if progress_df is None or progress_df.empty:
+            st.info("選択した期間に対象データがありません。")
+            return
+
+        if 'planned_quantity' not in progress_df.columns:
+            st.warning("planned_quantity列が取得できませんでした。")
+            return
+
+        progress_df = progress_df[pd.to_numeric(progress_df['planned_quantity'], errors='coerce').fillna(0) > 0].copy()
+
+        if progress_df.empty:
+            st.info("積載計画の数量が設定されている製品がありません。")
+            return
+
+        progress_df['delivery_date'] = pd.to_datetime(progress_df['delivery_date']).dt.date
+
+
+        st.subheader("📋 製品別マトリクス")
+        matrix_df = self._create_internal_order_matrix(progress_df)
+        if matrix_df.empty:
+            st.info("表示対象データがありません。")
+            return
+        st.dataframe(
+            matrix_df,
+            use_container_width=True,
+            hide_index=False,
+            height=600
+        )
+
+        st.markdown("---")
+        st.subheader("📥 Excel出力")
+        excel_data = self._export_internal_orders_to_excel(matrix_df, start_date, end_date)
+        filename = f"社内注文_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.xlsx"
+        st.download_button(
+            label="📥 ダウンロード",
+            data=excel_data,
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="internal_order_excel_download"
+        )
+
+    def _create_internal_order_matrix(self, progress_df: pd.DataFrame) -> pd.DataFrame:
+        """製品×納期のマトリクスを作成"""
+        product_codes = sorted(progress_df['product_code'].dropna().unique())
+        dates = sorted(progress_df['delivery_date'].dropna().unique())
+        date_columns = [d.strftime('%Y-%m-%d') for d in dates]
+
+        matrix_data = []
+        for product_code in product_codes:
+            product_data = progress_df[progress_df['product_code'] == product_code]
+            if product_data.empty:
+                continue
+
+            product_name = product_data['product_name'].iloc[0] if 'product_name' in product_data.columns else ''
+            row = {
+                '製品コード': product_code,
+                '製品名': product_name
+            }
+
+            for date_obj, date_str in zip(dates, date_columns):
+                day_data = product_data[product_data['delivery_date'] == date_obj]
+                if not day_data.empty:
+                    planned_qty = pd.to_numeric(day_data['planned_quantity'], errors='coerce').fillna(0).sum()
+                    row[date_str] = int(planned_qty) if planned_qty > 0 else 0
+                else:
+                    row[date_str] = 0
+
+            matrix_data.append(row)
+
+        matrix_df = pd.DataFrame(matrix_data)
+        if not matrix_df.empty:
+            matrix_df = matrix_df.set_index('製品コード')
+
+        return matrix_df
+
+    def _export_internal_orders_to_excel(self, matrix_df: pd.DataFrame, start_date: date, end_date: date):
+        """マトリクスデータをExcelに出力"""
+        output = BytesIO()
+
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            matrix_df.to_excel(writer, sheet_name='社内注文', index=True)
+
+            workbook = writer.book
+            worksheet = writer.sheets['社内注文']
+
+            header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            header_font = Font(color="FFFFFF", bold=True, size=11)
+            center_alignment = Alignment(horizontal='center', vertical='center')
+            border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+
+            for cell in worksheet[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = center_alignment
+                cell.border = border
+
+            for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row,
+                                           min_col=1, max_col=worksheet.max_column):
+                for cell in row:
+                    cell.alignment = center_alignment
+                    cell.border = border
+                    if isinstance(cell.value, (int, float)) and cell.column > 2:
+                        cell.number_format = '#,##0'
+
+            worksheet.column_dimensions['A'].width = 15
+            worksheet.column_dimensions['B'].width = 30
+            for col_idx in range(3, worksheet.max_column + 1):
+                col_letter = openpyxl.utils.get_column_letter(col_idx)
+                worksheet.column_dimensions[col_letter].width = 12
+
+            worksheet.insert_rows(1)
+            worksheet['A1'] = f"社内注文 マトリクス（{start_date.strftime('%Y年%m月%d日')} ～ {end_date.strftime('%Y年%m月%d日')}）"
+            worksheet['A1'].font = Font(bold=True, size=14)
+            worksheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=worksheet.max_column)
+            worksheet['A1'].alignment = center_alignment
+
+        output.seek(0)
+        return output
