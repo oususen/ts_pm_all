@@ -6,21 +6,36 @@ from ui.components.forms import FormComponents
 class ConstraintsPage:
     """制限設定ページ - 生産・運送制約の設定画面"""
     
-    def __init__(self, production_service):
+    def __init__(self, production_service, auth_service=None):
         self.service = production_service
+        self.auth_service = auth_service
+
+    def _can_edit_page(self) -> bool:
+        """ページ編集権限チェック"""
+        if not self.auth_service:
+            return True
+        user = st.session_state.get('user')
+        if not user:
+            return False
+        return self.auth_service.can_edit_page(user['id'], "制限設定")
     
     def show(self):
         """ページ表示"""
         st.title("⚙️ 生産・運送制限設定")
-        
+
+        # 権限チェック
+        can_edit = self._can_edit_page()
+        if not can_edit:
+            st.warning("⚠️ この画面の編集権限がありません。閲覧のみ可能です。")
+
         tab1, tab2 = st.tabs(["生産能力設定", "運送制限設定"])
-        
+
         with tab1:
-            self._show_production_constraints()
+            self._show_production_constraints(can_edit)
         with tab2:
             self._show_transport_constraints()
     
-    def _show_production_constraints(self):
+    def _show_production_constraints(self, can_edit):
         """生産制約設定表示"""
         st.header("🏭 生産能力設定")
         st.write("製品ごとの生産能力と平均化レベルを設定します。")
@@ -58,16 +73,16 @@ class ConstraintsPage:
             
             col1, col2 = st.columns([1, 4])
             with col1:
-                if st.button("💾 生産制約を保存", type="primary"):
+                if st.button("💾 生産制約を保存", type="primary", disabled=not can_edit):
                     try:
                         self.service.save_product_constraints(constraints_data)
                         st.success("生産制約設定を保存しました")
                         st.rerun()
                     except Exception as e:
                         st.error(f"保存エラー: {e}")
-            
+
             with col2:
-                if st.button("🔄 デフォルト値にリセット"):
+                if st.button("🔄 デフォルト値にリセット", disabled=not can_edit):
                     st.info("リセットするにはページを再読み込みしてください")
             
             # 現在の設定表示

@@ -6,25 +6,40 @@ from ui.components.forms import FormComponents
 class ProductPage:
     """製品管理ページ - マトリックス編集対応"""
     
-    def __init__(self, production_service, transport_service):
+    def __init__(self, production_service, transport_service, auth_service=None):
         self.production_service = production_service
         self.transport_service = transport_service
+        self.auth_service = auth_service
+
+    def _can_edit_page(self) -> bool:
+        """ページ編集権限チェック"""
+        if not self.auth_service:
+            return True
+        user = st.session_state.get('user')
+        if not user:
+            return False
+        return self.auth_service.can_edit_page(user['id'], "製品管理")
     
     def show(self):
         """ページ表示"""
         st.title("📦 製品管理")
         st.write("製品の登録・編集・削除、および容器との紐付けを管理します。")
-        
+
+        # 権限チェック
+        can_edit = self._can_edit_page()
+        if not can_edit:
+            st.warning("⚠️ この画面の編集権限がありません。閲覧のみ可能です。")
+
         tab1, tab2, tab3 = st.tabs(["📊 製品一覧（マトリックス）", "➕ 製品登録", "🔗 製品×容器紐付け"])
-        
+
         with tab1:
-            self._show_product_matrix()
+            self._show_product_matrix(can_edit)
         with tab2:
-            self._show_product_registration()
+            self._show_product_registration(can_edit)
         with tab3:
             self._show_product_container_mapping()
     
-    def _show_product_matrix(self):
+    def _show_product_matrix(self, can_edit):
         """製品一覧 - マトリックス編集"""
         st.header("📊 製品一覧（編集可能）")
         
@@ -132,7 +147,7 @@ class ProductPage:
             col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 4])
             
             with col_btn1:
-                if st.button("💾 変更を保存", type="primary", use_container_width=True):
+                if st.button("💾 変更を保存", type="primary", use_container_width=True, disabled=not can_edit):
                     changes_saved = self._save_product_changes(
                         original_df=products_df,
                         edited_df=edited_df,
@@ -147,7 +162,7 @@ class ProductPage:
                         st.info("変更はありませんでした")
             
             with col_btn2:
-                if st.button("🗑️ 選択製品を削除", type="secondary", use_container_width=True):
+                if st.button("🗑️ 選択製品を削除", type="secondary", use_container_width=True, disabled=not can_edit):
                     st.warning("削除機能は個別製品選択後に実行してください")
             
             # 詳細編集エリア（トラック選択対応）
@@ -168,7 +183,7 @@ class ProductPage:
                 product = next((p for p in products if p.id == product_id), None)
                 
                 if product:
-                    self._show_product_detail_editor_with_truck_select(product, containers, trucks_df, container_map)
+                    self._show_product_detail_editor_with_truck_select(product, containers, trucks_df, container_map, can_edit)
         
         except Exception as e:
             st.error(f"製品一覧エラー: {e}")
@@ -239,7 +254,7 @@ class ProductPage:
         
         return changes_made
     
-    def _show_product_detail_editor_with_truck_select(self, product, containers, trucks_df, container_map):
+    def _show_product_detail_editor_with_truck_select(self, product, containers, trucks_df, container_map, can_edit):
         """個別製品の詳細編集・削除（トラック複数選択対応）"""
         
         with st.container(border=True):
@@ -316,7 +331,7 @@ class ProductPage:
                 else:
                     st.warning("トラックが未設定です")
                 
-                submitted = st.form_submit_button("💾 トラック設定を保存", type="primary")
+                submitted = st.form_submit_button("💾 トラック設定を保存", type="primary", disabled=not can_edit)
                 
                 if submitted:
                     # ✅ 選択された順番でトラックIDを保存（優先順位）
@@ -339,7 +354,7 @@ class ProductPage:
             col_del1, col_del2 = st.columns([1, 5])
             
             with col_del1:
-                if st.button("🗑️ この製品を削除", key=f"delete_product_{product.id}", type="secondary", use_container_width=True):
+                if st.button("🗑️ この製品を削除", key=f"delete_product_{product.id}", type="secondary", use_container_width=True, disabled=not can_edit):
                     if st.session_state.get(f"confirm_delete_{product.id}", False):
                         success = self.production_service.delete_product(product.id)
                         if success:
@@ -371,15 +386,19 @@ class ProductPage:
         except:
             return []
     
-    def _show_product_registration(self):
+    def _show_product_registration(self, can_edit):
         """新規製品登録"""
         st.header("➕ 新規製品登録")
-        
+
+        if not can_edit:
+            st.info("編集権限がないため、新規登録はできません")
+            return
+
         try:
             containers = self.transport_service.get_containers()
             trucks_df = self.transport_service.get_trucks()
             product_data = FormComponents.product_form(containers, trucks_df)
-            
+
             if product_data:
                 success = self.production_service.create_product(product_data)
                 if success:

@@ -17,11 +17,31 @@ import os
 
 class TransportPage:
     """配送便計画ページ - トラック積載計画の作成画面"""
-    
-    def __init__(self, transport_service):
+
+    def __init__(self, transport_service, auth_service=None):
         self.service = transport_service
+        self.auth_service = auth_service
         self.tables = TableComponents()
-    
+
+    def _can_edit_page(self) -> bool:
+        """ページ編集権限チェック"""
+        if not self.auth_service:
+            return True
+        user = st.session_state.get('user')
+        if not user:
+            return False
+        return self.auth_service.can_edit_page(user['id'], "配送便計画")
+
+    def _can_edit_tab(self, tab_name: str) -> bool:
+        """タブ編集権限チェック"""
+        if not self.auth_service:
+            return True
+        user = st.session_state.get('user')
+        if not user:
+            return False
+        # タブ権限がない場合はページ権限を使用
+        return self.auth_service.can_edit_tab(user['id'], "配送便計画", tab_name) or self._can_edit_page()
+
     def show(self):
         """ページ表示"""
         st.title("🚚 配送便計画")
@@ -52,6 +72,12 @@ class TransportPage:
     def _show_truck_container_rules(self):
         """トラック×容器ルール管理（このページ内のタブ）"""
         st.header("🧱 トラック×容器ルール")
+
+        # 編集権限チェック
+        can_edit = self._can_edit_page()
+        if not can_edit:
+            st.warning("⚠️ この画面の編集権限がありません。閲覧のみ可能です。")
+
         try:
             trucks_df = self.service.get_trucks()
             if trucks_df is None or getattr(trucks_df, 'empty', False):
@@ -90,7 +116,7 @@ class TransportPage:
                 with col5:
                     pass
 
-                submitted = st.form_submit_button("保存", type="primary")
+                submitted = st.form_submit_button("保存", type="primary", disabled=not can_edit)
                 if submitted:
                     if truck_name == "選択" or container_name == "選択":
                         st.error("トラック名と容器名を選択してください")
@@ -176,7 +202,7 @@ class TransportPage:
                     options=["選択"] + [str(r.get('id')) for r in rules if r.get('id') is not None],
                     key="tcr_delete_select"
                 )
-                if st.button("削除", type="secondary", disabled=(target_id == "選択"), key="tcr_delete_btn"):
+                if st.button("削除", type="secondary", disabled=(not can_edit or target_id == "選択"), key="tcr_delete_btn"):
                     try:
                         rid = int(target_id)
                         ok = self.service.delete_truck_container_rule(rid)
@@ -317,7 +343,12 @@ class TransportPage:
     def _show_loading_planning(self):
         """積載計画作成"""
         st.header("📦 積載計画自動作成")
-        
+
+        # 編集権限チェック
+        can_edit = self._can_edit_page()
+        if not can_edit:
+            st.warning("⚠️ この画面の編集権限がありません。閲覧のみ可能です。")
+
         st.info("""
         **機能説明:**
         - オーダー情報から自動的に積載計画を作成します
@@ -361,8 +392,8 @@ class TransportPage:
         st.info(f"📅 計画期間: **{days}日間** ({start_date.strftime('%Y年%m月%d日')} ～ {end_date.strftime('%Y年%m月%d日')})")
    
         st.markdown("---")
-        
-        if st.button("🔄 積載計画を作成", type="primary", use_container_width=True):
+
+        if st.button("🔄 積載計画を作成", type="primary", use_container_width=True, disabled=not can_edit):
             with st.spinner("積載計画を計算中..."):
                 try:
                     result = self.service.calculate_loading_plan_from_orders(
@@ -438,7 +469,7 @@ class TransportPage:
                     key="plan_name_save"
                 )
                 
-                if st.button("💾 DBに保存", type="primary"):
+                if st.button("💾 DBに保存", type="primary", disabled=not can_edit):
                     try:
                         plan_id = self.service.save_loading_plan(result, plan_name)
                         st.success(f"✅ 計画を保存しました (ID: {plan_id})")
@@ -620,6 +651,9 @@ class TransportPage:
     def _display_saved_plan(self, plan_data: Dict):
         """保存済み計画を表形式で表示・編集"""
         try:
+            # 編集権限チェック
+            can_edit = self._can_edit_page()
+
             st.subheader("計画詳細")
             
             # ✅ 出力形式選択とエクスポートボタン
@@ -706,7 +740,7 @@ class TransportPage:
                 st.warning(f"⚠️ 計画「{plan_data.get('plan_name', '無題')}」を削除しますか？この操作は取り消せません。")
             
             with col_delete2:
-                if st.button("🗑️ 削除", type="secondary", use_container_width=True, key=f"delete_{plan_data.get('id')}"):
+                if st.button("🗑️ 削除", type="secondary", use_container_width=True, disabled=not can_edit, key=f"delete_{plan_data.get('id')}"):
                     if self._confirm_and_delete_plan(plan_data.get('id'), plan_data.get('plan_name', '無題')):
                         st.success("✅ 計画を削除しました")
                         st.rerun()
@@ -1401,11 +1435,17 @@ class TransportPage:
         st.header("🧰 容器管理")
         st.write("積載に使用する容器の登録と管理を行います。")
 
-        try:
-            st.subheader("新規容器登録")
-            container_data = FormComponents.container_form()
+        # 編集権限チェック
+        can_edit = self._can_edit_page()
+        if not can_edit:
+            st.warning("⚠️ この画面の編集権限がありません。閲覧のみ可能です。")
 
-            if container_data:
+        try:
+            if can_edit:
+                st.subheader("新規容器登録")
+                container_data = FormComponents.container_form()
+
+            if can_edit and container_data:
                 success = self.service.create_container(container_data)
                 if success:
                     st.success(f"容器 '{container_data['name']}' を登録しました")
@@ -1452,7 +1492,7 @@ class TransportPage:
                                     value=getattr(container, 'max_stack', 1)
                                 )
 
-                            submitted = st.form_submit_button("更新", type="primary")
+                            submitted = st.form_submit_button("更新", type="primary", disabled=not can_edit)
                             if submitted:
                                 update_data = {
                                     "name": new_name,
@@ -1470,7 +1510,7 @@ class TransportPage:
                                 else:
                                     st.error("❌ 容器更新に失敗しました")
 
-                        if st.button("🗑️ 削除", key=f"delete_container_{container.id}"):
+                        if st.button("🗑️ 削除", key=f"delete_container_{container.id}", disabled=not can_edit):
                             success = self.service.delete_container(container.id)
                             if success:
                                 st.success(f"容器 '{container.name}' を削除しました")
@@ -1500,11 +1540,17 @@ class TransportPage:
         st.header("🚛 トラック管理")
         st.write("積載に使用するトラックの登録と管理を行います。")
 
-        try:
-            st.subheader("新規トラック登録")
-            truck_data = FormComponents.truck_form()
+        # 編集権限チェック
+        can_edit = self._can_edit_page()
+        if not can_edit:
+            st.warning("⚠️ この画面の編集権限がありません。閲覧のみ可能です。")
 
-            if truck_data:
+        try:
+            if can_edit:
+                st.subheader("新規トラック登録")
+                truck_data = FormComponents.truck_form()
+
+            if can_edit and truck_data:
                 success = self.service.create_truck(truck_data)
                 if success:
                     st.success(f"トラック '{truck_data['name']}' を登録しました")
@@ -1559,7 +1605,7 @@ class TransportPage:
                                     value=truck.get('priority_product_codes', '') or '',
                                     placeholder="例: PRD001,PRD002"
                                 )
-                            submitted = st.form_submit_button("更新", type="primary")
+                            submitted = st.form_submit_button("更新", type="primary", disabled=not can_edit)
                             if submitted:
                                 update_data = {
                                     "name": new_name,
@@ -1573,7 +1619,7 @@ class TransportPage:
                                     "default_use": new_default,
                                     # 新規追加：優先積載製品コード
                                     "priority_product_codes": new_priority.strip() if new_priority else None
-    
+
                                 }
                                 success = self.service.update_truck(truck['id'], update_data)
                                 if success:
@@ -1582,7 +1628,7 @@ class TransportPage:
                                 else:
                                     st.error("❌ トラック更新に失敗しました")
 
-                        if st.button("🗑️ 削除", key=f"delete_truck_{truck['id']}"):
+                        if st.button("🗑️ 削除", key=f"delete_truck_{truck['id']}", disabled=not can_edit):
                             success = self.service.delete_truck(truck['id'])
                             if success:
                                 st.success(f"トラック '{truck['name']}' を削除しました")

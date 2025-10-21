@@ -7,26 +7,41 @@ from typing import Dict, Optional, Any
 class DeliveryProgressPage:
     """納入進度管理ページ"""
     
-    def __init__(self, transport_service):
+    def __init__(self, transport_service, auth_service=None):
         self.service = transport_service
+        self.auth_service = auth_service
+
+    def _can_edit_page(self) -> bool:
+        """ページ編集権限チェック"""
+        if not self.auth_service:
+            return True
+        user = st.session_state.get('user')
+        if not user:
+            return False
+        return self.auth_service.can_edit_page(user['id'], "納入進度")
     
     def show(self):
         """ページ表示"""
         st.title("📋 納入進度管理")
         st.write("受注から出荷までの進捗を管理します。")
-        
+
+        # 権限チェック
+        can_edit = self._can_edit_page()
+        if not can_edit:
+            st.warning("⚠️ この画面の編集権限がありません。閲覧のみ可能です。")
+
         tab1, tab2, tab3, tab4 = st.tabs(["📊 進度一覧", "✅ 実績登録", "➕ 新規登録", "📦 出荷実績"])
-        
+
         with tab1:
-            self._show_progress_list()
+            self._show_progress_list(can_edit)
         with tab2:
-            self._show_actual_registration()
+            self._show_actual_registration(can_edit)
         with tab3:
-            self._show_progress_registration()
+            self._show_progress_registration(can_edit)
         with tab4:
             self._show_shipment_records()
     
-    def _show_progress_list(self):
+    def _show_progress_list(self, can_edit):
         """進度一覧表示"""
         st.header("📊 納入進度一覧")
         
@@ -113,7 +128,7 @@ class DeliveryProgressPage:
                 col_recalc_single, col_recalc_all = st.columns(2)
 
                 with col_recalc_single:
-                    if st.button("選択製品のみ再計算"):
+                    if st.button("選択製品のみ再計算", disabled=not can_edit):
                         if product_id:
                             self.service.recompute_planned_progress(product_id, recal_start_date, recal_end_date)
                             st.success("再計算が完了しました")
@@ -121,7 +136,7 @@ class DeliveryProgressPage:
                             st.error("製品を選択してください")
 
                 with col_recalc_all:
-                    if st.button("全製品を再計算"):
+                    if st.button("全製品を再計算", disabled=not can_edit):
                         self.service.recompute_planned_progress_all(recal_start_date, recal_end_date)
                         st.success("全ての製品に対する再計算が完了しました")
 
@@ -154,7 +169,7 @@ class DeliveryProgressPage:
                 col_sr_one, col_sr_all = st.columns(2)
 
                 with col_sr_one:
-                    if st.button("選択製品の実績進度を再計算", key="btn_sr_one"):
+                    if st.button("選択製品の実績進度を再計算", key="btn_sr_one", disabled=not can_edit):
                         if sr_product_id:
                             self.service.recompute_shipped_remaining(sr_product_id, sr_start_date, sr_end_date)
                             st.success("実績進度の再計算が完了しました")
@@ -162,7 +177,7 @@ class DeliveryProgressPage:
                             st.error("製品を選択してください")
 
                 with col_sr_all:
-                    if st.button("全製品の実績進度を再計算", key="btn_sr_all"):
+                    if st.button("全製品の実績進度を再計算", key="btn_sr_all", disabled=not can_edit):
                         self.service.recompute_shipped_remaining_all(sr_start_date, sr_end_date)
                         st.success("全製品の実績進度の再計算が完了しました")
                               
@@ -185,7 +200,7 @@ class DeliveryProgressPage:
                 )
                 
                 if view_mode == 'マトリックス表示（日付×製品）':
-                    self._show_matrix_view(progress_df)
+                    self._show_matrix_view(progress_df, can_edit)
                 else:
                     # 既存の一覧表示
                     # 緊急度フラグ追加
@@ -258,7 +273,7 @@ class DeliveryProgressPage:
                     )
                     st.caption("手動計画列のみ編集できます。空欄にすると自動計画に戻ります。")
 
-                    if st.button("手動計画を保存", type="primary", key="save_manual_plans"):
+                    if st.button("手動計画を保存", type="primary", key="save_manual_plans", disabled=not can_edit):
                         updated_count = 0
                         for idx, row in edited_table.iterrows():
                             new_val = row['manual_planning_quantity']
@@ -373,7 +388,7 @@ class DeliveryProgressPage:
                                         disabled=not use_manual
                                     )
                                     
-                                    submitted = st.form_submit_button("💾 更新", type="primary")
+                                    submitted = st.form_submit_button("💾 更新", type="primary", disabled=not can_edit)
                                     
                                     if submitted:
                                         update_data = {
@@ -492,7 +507,7 @@ class DeliveryProgressPage:
 
                                     # 出荷実績登録ボタン
                                     
-                                    ship_submitted = st.form_submit_button("📦 出荷実績を登録", type="primary")
+                                    ship_submitted = st.form_submit_button("📦 出荷実績を登録", type="primary", disabled=not can_edit)
                                     
                                     if ship_submitted:
                                         if not truck_id:
@@ -523,7 +538,7 @@ class DeliveryProgressPage:
                             st.markdown("---")
                             col_del1, col_del2 = st.columns([1, 5])
                             with col_del1:
-                                if st.button(f"🗑️ 削除", key=f"delete_progress_{progress_id}", type="secondary"):
+                                if st.button(f"🗑️ 削除", key=f"delete_progress_{progress_id}", type="secondary", disabled=not can_edit):
                                     success = self.service.delete_delivery_progress(progress_id)
                                     if success:
                                         st.success("進度を削除しました")
@@ -537,7 +552,7 @@ class DeliveryProgressPage:
         except Exception as e:
             st.error(f"進度一覧エラー: {e}")
     
-    def _show_matrix_view(self, progress_df: pd.DataFrame):
+    def _show_matrix_view(self, progress_df: pd.DataFrame, can_edit):
         """マトリックス表示（横軸=日付、縦軸=製品コード×状態）- 編集可能"""
         
         # 製品名マッピング作成
@@ -655,7 +670,7 @@ class DeliveryProgressPage:
         col_save1, col_save2 = st.columns([1, 5])
         
         with col_save1:
-            if st.button("💾 変更を保存", type="primary", use_container_width=True):
+            if st.button("💾 変更を保存", type="primary", use_container_width=True, disabled=not can_edit):
                 # 変更を検出して保存
                 changes_saved = self._save_matrix_changes(
                     original_df=result_df,
@@ -785,9 +800,13 @@ class DeliveryProgressPage:
         
         return changes_made
 
-    def _show_progress_registration(self):
+    def _show_progress_registration(self, can_edit):
         """新規登録"""
         st.header("➕ 新規納入進度登録")
+
+        if not can_edit:
+            st.info("編集権限がないため、新規登録はできません")
+            return
         
         with st.form("create_progress_form"):
             col1, col2 = st.columns(2)
@@ -852,9 +871,13 @@ class DeliveryProgressPage:
                     else:
                         st.error("納入進度登録に失敗しました")
     
-    def _show_actual_registration(self):
+    def _show_actual_registration(self, can_edit):
         """実績登録"""
         st.header("✅ 積込実績登録")
+
+        if not can_edit:
+            st.info("編集権限がないため、実績登録はできません")
+            return
         
         try:
             trucks_df = self.service.get_trucks()

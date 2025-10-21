@@ -7,34 +7,53 @@ from services.calendar_import_service import CalendarImportService
 class CalendarPage:
     """会社カレンダー管理ページ"""
     
-    def __init__(self, db_manager):
+    def __init__(self, db_manager, auth_service=None):
         self.import_service = CalendarImportService(db_manager)
         self.calendar_repo = self.import_service.calendar_repo
+        self.auth_service = auth_service
+
+    def _can_edit_page(self) -> bool:
+        """ページ編集権限チェック"""
+        if not self.auth_service:
+            return True
+        user = st.session_state.get('user')
+        if not user:
+            return False
+        return self.auth_service.can_edit_page(user['id'], "📅 会社カレンダー")
     
     def show(self):
         """ページ表示"""
         st.title("📅 会社カレンダー管理")
         st.write("会社のExcelカレンダーをインポートして、運送便計画に反映させます。")
-        
+
+        # 権限チェック
+        can_edit = self._can_edit_page()
+        if not can_edit:
+            st.warning("⚠️ この画面の編集権限がありません。閲覧のみ可能です。")
+
         tab1, tab2, tab3, tab4 = st.tabs([
             "📥 Excelインポート",
-            "📆 カレンダー表示", 
+            "📆 カレンダー表示",
             "➕ 手動追加",
             "📊 年間サマリー"
         ])
-        
+
         with tab1:
-            self._show_excel_import()
+            self._show_excel_import(can_edit)
         with tab2:
             self._show_calendar_view()
         with tab3:
-            self._show_manual_add()
+            self._show_manual_add(can_edit)
         with tab4:
             self._show_yearly_summary()
     
-    def _show_excel_import(self):
+    def _show_excel_import(self, can_edit):
         """Excelインポート"""
         st.header("📥 会社カレンダーExcelインポート")
+
+        if not can_edit:
+            st.info("編集権限がないため、インポートはできません")
+            return
         
         st.info("""
         **対応フォーマット:**
@@ -219,9 +238,13 @@ class CalendarPage:
             else:
                 st.info("指定期間のカレンダーデータがありません")
     
-    def _show_manual_add(self):
+    def _show_manual_add(self, can_edit):
         """手動追加"""
         st.header("➕ 休日・営業日の手動追加")
+
+        if not can_edit:
+            st.info("編集権限がないため、手動追加はできません")
+            return
         
         col_a, col_b = st.columns(2)
         

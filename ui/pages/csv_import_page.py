@@ -7,10 +7,20 @@ from services.transport_service import TransportService
 
 class CSVImportPage:
     """CSV受注インポートページ"""
-    
-    def __init__(self, db_manager):
+
+    def __init__(self, db_manager, auth_service=None):
         self.import_service = CSVImportService(db_manager)
-        self.service = TransportService(db_manager)    
+        self.service = TransportService(db_manager)
+        self.auth_service = auth_service
+
+    def _can_edit_page(self) -> bool:
+        """ページ編集権限チェック"""
+        if not self.auth_service:
+            return True
+        user = st.session_state.get('user')
+        if not user:
+            return False
+        return self.auth_service.can_edit_page(user['id'], "CSV受注取込")    
     def show(self):
         """ページ表示"""
         st.title("📥 受注CSVインポート")
@@ -28,13 +38,18 @@ class CSVImportPage:
     def _show_upload_form(self):
         """アップロードフォーム表示"""
         st.header("📤 CSVファイルアップロード")
-        
+
+        # 編集権限チェック
+        can_edit = self._can_edit_page()
+        if not can_edit:
+            st.warning("⚠️ この画面の編集権限がありません。閲覧のみ可能です。")
+
         st.info("""
         **対応フォーマット:**
         - エンコーディング: Shift-JIS
         - レコード識別: V2（日付）、V3（数量）
         - 必須カラム: データＮＯ、品番、検査区分、スタート月度など
-        
+
         **インポート仕様:**
         - 既存データに追加されます
         - 同じ製品コード×日付のデータは数量が合算されます
@@ -48,12 +63,12 @@ class CSVImportPage:
             col_recalc_single, col_recalc_all = st.columns(2)
 
             with col_recalc_single:
-                if st.button("選択製品のみ再計算", key="recalc_single_upload"):
+                if st.button("選択製品のみ再計算", key="recalc_single_upload", disabled=not can_edit):
                     self.service.recompute_planned_progress(product_id, recal_start_date, recal_end_date)
                     st.success("再計算が完了しました")
 
             with col_recalc_all:
-                if st.button("全製品を再計算", key="recalc_all_upload"):
+                if st.button("全製品を再計算", key="recalc_all_upload", disabled=not can_edit):
                     self.service.recompute_planned_progress_all(recal_start_date, recal_end_date)
                     st.success("全ての製品に対する再計算が完了しました")
         # ファイルアップロード
@@ -108,7 +123,7 @@ class CSVImportPage:
                 col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
                 
                 with col_btn1:
-                    if st.button("🔄 インポート実行", type="primary", use_container_width=True):
+                    if st.button("🔄 インポート実行", type="primary", use_container_width=True, disabled=not can_edit):
                         with st.spinner("データをインポート中..."):
                             try:
                                 uploaded_file.seek(0)

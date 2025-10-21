@@ -10,10 +10,20 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 class ProductionPage:
     """生産計画ページ（シミュレーション + CRUD管理）"""
 
-    def __init__(self, production_service, transport_service=None):
+    def __init__(self, production_service, transport_service=None, auth_service=None):
         self.service = production_service
         self.transport_service = transport_service
+        self.auth_service = auth_service
         self.charts = ChartComponents()
+
+    def _can_edit_page(self) -> bool:
+        """ページ編集権限チェック"""
+        if not self.auth_service:
+            return True
+        user = st.session_state.get('user')
+        if not user:
+            return False
+        return self.auth_service.can_edit_page(user['id'], "生産計画")
 
     # -----------------------------
     # Entry
@@ -21,13 +31,18 @@ class ProductionPage:
     def show(self):
         st.title("🏭 生産計画")
 
+        # 権限チェック
+        can_edit = self._can_edit_page()
+        if not can_edit:
+            st.warning("⚠️ この画面の編集権限がありません。閲覧のみ可能です。")
+
         tab1, tab2, tab3 = st.tabs(["📊 計画シミュレーション", "📝 生産計画管理", "🔧 製造工程（加工対象）"])
 
         with tab1:
-            self._show_plan_simulation()
+            self._show_plan_simulation(can_edit)
 
         with tab2:
-            self._show_plan_management()
+            self._show_plan_management(can_edit)
 
         with tab3:
             self._show_manufacturing_process()
@@ -35,7 +50,7 @@ class ProductionPage:
     # -----------------------------
     # 旧：計画計算＋表示（既存機能を踏襲）
     # -----------------------------
-    def _show_plan_simulation(self):
+    def _show_plan_simulation(self, can_edit):
         st.subheader("📊 計画シミュレーション")
         st.write("指定した期間の生産計画を計算・表示します。")
 
@@ -52,7 +67,7 @@ class ProductionPage:
             )
         with col3:
             st.write(""); st.write("")
-            calculate_clicked = st.button("🔧 計画計算", type="primary", use_container_width=True)
+            calculate_clicked = st.button("🔧 計画計算", type="primary", use_container_width=True, disabled=not can_edit)
 
         if calculate_clicked:
             self._calculate_and_show_plan(start_date, end_date)
@@ -154,7 +169,7 @@ class ProductionPage:
     # -----------------------------
     # 新規：CRUD 管理タブ
     # -----------------------------
-    def _show_plan_management(self):
+    def _show_plan_management(self, can_edit):
         st.subheader("📝 生産計画管理（登録・更新・削除）")
 
         # --- 新規登録フォーム（最低限の項目をインライン実装） ---
@@ -163,7 +178,7 @@ class ProductionPage:
             product_id = st.number_input("製品ID", min_value=1, step=1)
             quantity = st.number_input("数量", min_value=1, step=1)
             scheduled_date = st.date_input("日付", value=date.today())
-            submitted = st.form_submit_button("登録")
+            submitted = st.form_submit_button("登録", disabled=not can_edit)
 
             if submitted:
                 if hasattr(self.service, "create_production"):
@@ -202,7 +217,7 @@ class ProductionPage:
                     new_quantity   = st.number_input("数量",    min_value=1, value=plan.quantity,    key=f"q_{plan.id}")
                     new_date       = st.date_input("日付", value=plan.scheduled_date, key=f"d_{plan.id}")
 
-                    update_clicked = st.form_submit_button("更新")
+                    update_clicked = st.form_submit_button("更新", disabled=not can_edit)
                     if update_clicked:
                         if hasattr(self.service, "update_production"):
                             update_data = {
@@ -220,7 +235,7 @@ class ProductionPage:
                             st.warning("update_production() が service に未実装です")
 
                 # 削除ボタン
-                delete_clicked = st.button("🗑️ 削除", key=f"del_{plan.id}")
+                delete_clicked = st.button("🗑️ 削除", key=f"del_{plan.id}", disabled=not can_edit)
                 if delete_clicked:
                     if hasattr(self.service, "delete_production"):
                         ok = self.service.delete_production(plan.id)
