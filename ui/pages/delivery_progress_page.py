@@ -154,33 +154,44 @@ class DeliveryProgressPage:
                         axis=1
                     )
                     
+                    # 計画進度と進度を計算
+                    progress_df['planned_progress'] = (
+                        progress_df.get('planned_quantity', 0).fillna(0) -
+                        progress_df.get('order_quantity', 0).fillna(0)
+                    )
+                    progress_df['actual_progress'] = (
+                        progress_df.get('shipped_quantity', 0).fillna(0) -
+                        progress_df.get('order_quantity', 0).fillna(0)
+                    )
+
                     # 表示用データフレーム
-                    display_columns = ['urgency', 'order_id', 'product_code', 'product_name',
-                                     'customer_name', 'delivery_date', 'order_quantity']
+                    display_columns = ['urgency', 'product_code', 'product_name',
+                                     'delivery_date', 'order_quantity']
 
                     if 'manual_planning_quantity' in progress_df.columns:
                         display_columns.append('manual_planning_quantity')
-                    
+
                     # planned_quantityカラムがあれば追加
                     if 'planned_quantity' in progress_df.columns:
                         display_columns.append('planned_quantity')
-                    
-                    display_columns.extend(['shipped_quantity', 'remaining_quantity', 'status'])
-                    
+
+                    # 計画進度と進度を追加
+                    display_columns.extend(['planned_progress', 'shipped_quantity', 'actual_progress', 'remaining_quantity', 'status'])
+
                     display_df = progress_df[display_columns].copy()
-                    
+
                     # カラム名を日本語に変更
                     column_names = {
                         'urgency': '緊急度',
-                        'order_id': 'オーダーID',
                         'product_code': '製品コード',
                         'product_name': '製品名',
-                        'customer_name': '得意先',
                         'delivery_date': '納期',
                         'order_quantity': '受注数',
                         'manual_planning_quantity': '手動計画',
                         'planned_quantity': '計画数',
+                        'planned_progress': '計画進度',
                         'shipped_quantity': '出荷済',
+                        'actual_progress': '進度',
                         'remaining_quantity': '残数',
                         'status': 'ステータス'
                     }
@@ -197,15 +208,25 @@ class DeliveryProgressPage:
                     )
                     
                     st.subheader("🖊️ 手動計画数量の一括編集")
-                    editor_source = progress_df[['id', 'order_id', 'product_code', 'product_name', 'delivery_date', 'order_quantity']].copy()
+                    # 上の一覧表示と同じ列構成にする
+                    editor_columns = ['id', 'urgency', 'product_code', 'product_name', 'delivery_date', 'order_quantity']
+
+                    if 'manual_planning_quantity' in progress_df.columns:
+                        editor_columns.append('manual_planning_quantity')
+                    if 'planned_quantity' in progress_df.columns:
+                        editor_columns.append('planned_quantity')
+
+                    editor_columns.extend(['planned_progress', 'shipped_quantity', 'actual_progress', 'remaining_quantity', 'status'])
+
+                    editor_source = progress_df[editor_columns].copy()
                     editor_source = editor_source.reset_index(drop=True)
-                    manual_series = progress_df.get('manual_planning_quantity')
-                    if manual_series is None:
-                        manual_series = pd.Series([None] * len(progress_df))
-                    editor_source['manual_planning_quantity'] = manual_series.reset_index(drop=True)
+
                     original_editor = editor_source.copy()
-                    editor_source['manual_planning_quantity'] = editor_source['manual_planning_quantity'].astype('Float64')
-                    
+
+                    # 手動計画のみFloat64型に変換（編集可能にするため）
+                    if 'manual_planning_quantity' in editor_source.columns:
+                        editor_source['manual_planning_quantity'] = editor_source['manual_planning_quantity'].astype('Float64')
+
                     edited_table = st.data_editor(
                         editor_source,
                         num_rows="fixed",
@@ -213,14 +234,20 @@ class DeliveryProgressPage:
                         use_container_width=True,
                         column_config={
                             'id': st.column_config.NumberColumn('ID', format='%d'),
-                            'order_id': st.column_config.TextColumn('オーダーID'),
+                            'urgency': st.column_config.TextColumn('緊急度'),
                             'product_code': st.column_config.TextColumn('製品コード'),
                             'product_name': st.column_config.TextColumn('製品名'),
                             'delivery_date': st.column_config.DateColumn('納期', format='YYYY-MM-DD'),
                             'order_quantity': st.column_config.NumberColumn('受注数', format='%d'),
                             'manual_planning_quantity': st.column_config.NumberColumn('手動計画', min_value=0, step=1),
+                            'planned_quantity': st.column_config.NumberColumn('計画数', format='%d'),
+                            'planned_progress': st.column_config.NumberColumn('計画進度', format='%d'),
+                            'shipped_quantity': st.column_config.NumberColumn('出荷済', format='%d'),
+                            'actual_progress': st.column_config.NumberColumn('進度', format='%d'),
+                            'remaining_quantity': st.column_config.NumberColumn('残数', format='%d'),
+                            'status': st.column_config.TextColumn('ステータス'),
                         },
-                        disabled=['id', 'order_id', 'product_code', 'product_name', 'delivery_date', 'order_quantity'],
+                        disabled=['id', 'urgency', 'product_code', 'product_name', 'delivery_date', 'order_quantity', 'planned_quantity', 'planned_progress', 'shipped_quantity', 'actual_progress', 'remaining_quantity', 'status'],
                         key="manual_plan_editor",
                     )
                     st.caption("手動計画列のみ編集できます。空欄にすると自動計画に戻ります。")
