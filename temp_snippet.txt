@@ -1,0 +1,66 @@
+                    for warning in warnings:
+                        st.write(f"• {warning}")
+                
+                if not trucks:
+                    st.info("この日の積載予定はありません")
+                    continue
+                
+                for i, truck_plan in enumerate(trucks, 1):
+                    st.markdown(f"**🚛 便 #{i}: {truck_plan.get('truck_name', 'トラック名不明')}**")
+                    
+                    # ✅ デバッグ: truck_planの構造を確認
+                    st.write("🔍 デバッグ: truck_plan構造")
+                    st.json(truck_plan)
+                    
+                    util = truck_plan.get('utilization', {})
+                    col_u1, col_u2 = st.columns(2)
+                    with col_u1:
+                        st.metric("床面積積載率", f"{util.get('floor_area_rate', 0)}%")
+                    with col_u2:
+                        st.metric("体積積載率", f"{util.get('volume_rate', 0)}%")
+                    
+                    loaded_items = truck_plan.get('loaded_items', [])
+                    
+                    # ✅ デバッグ: loaded_itemsの中身を確認
+                    st.write(f"🔍 デバッグ: loaded_items数 = {len(loaded_items)}")
+                    if loaded_items:
+                        st.write("🔍 デバッグ: 最初のitem構造")
+                        st.json(loaded_items[0])
+                    
+                    if loaded_items:
+                        # ✅ 修正: container_nameフィールドも確認
+                        items_df = pd.DataFrame([{
+                            '製品コード': item.get('product_code', ''),
+                            '製品名': item.get('product_name', ''),
+                            '容器名': item.get('container_name', '不明'),  # ← 追加
+                            '容器数': item.get('num_containers', 0),
+                            '合計数量': item.get('total_quantity', 0),
+                            '床面積': f"{item.get('floor_area', 0):.2f}m²",  # ← 追加
+                            '納期': item['delivery_date'].strftime('%Y-%m-%d') if 'delivery_date' in item else '',
+                            '前倒し': '✓' if item.get('is_advanced', False) else '',  # ← 追加
+                        } for item in loaded_items])
+                        
+                        st.dataframe(items_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("積載品がありません")
+                    
+                    st.markdown("---")
+    
+    def _show_list_view(self, daily_plans):
+        """一覧表示"""
+        
+        all_items = []
+        
+        for date_str in sorted(daily_plans.keys()):
+            plan = daily_plans[date_str]
+            
+            trucks = plan.get('trucks', [])
+            
+            for truck_plan in trucks:
+                loaded_items = truck_plan.get('loaded_items', [])
+                truck_name = truck_plan.get('truck_name', 'トラック名不明')
+                utilization = truck_plan.get('utilization', {})
+                
+                for item in loaded_items:
+                    delivery_date = item.get('delivery_date')
+                    if delivery_date:

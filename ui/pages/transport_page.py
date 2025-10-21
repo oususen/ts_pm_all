@@ -422,9 +422,26 @@ class TransportPage:
                     if unplanned_orders:
                         st.warning(f"⚠️ 受注されたが積載されていない製品が {len(unplanned_orders)} 件あります")
                         unplanned_df = pd.DataFrame(unplanned_orders)
+
+                        # 不要な列を削除し、日本語列名に変更
+                        columns_to_drop = ['order_id', 'customer_name', 'product_id']
+                        unplanned_df = unplanned_df.drop(columns=[col for col in columns_to_drop if col in unplanned_df.columns], errors='ignore')
+
+                        # 列名を日本語に変更
+                        column_mapping = {
+                            'product_code': '製品コード',
+                            'product_name': '製品名',
+                            'order_quantity': '受注数量',
+                            'delivery_date': '納期',
+                            'planned_quantity': '計画数量',
+                            'shipped_quantity': '出荷済数量',
+                            'status': 'ステータス'
+                        }
+                        unplanned_df = unplanned_df.rename(columns=column_mapping)
+
                         st.dataframe(
                             unplanned_df,
-                            width='stretch',
+                            use_container_width=True,
                             hide_index=True
                         )
                     
@@ -465,7 +482,7 @@ class TransportPage:
                 st.write("**DBに保存**")
                 plan_name = st.text_input(
                     "計画名",
-                    value=f"積載計画_{result.get('period', '').split(' ~ ')[0]}",
+                    value=f"積載計画_{datetime.now().strftime('%Y%m%d_%H%M')}",
                     key="plan_name_save"
                 )
                 
@@ -478,7 +495,7 @@ class TransportPage:
                         st.error(f"保存エラー: {e}")
             
             with col_export2:
-                st.write("**Excel出力**")
+                st.write("**Excel出力(確認用）**")
                 export_format = st.radio(
                     "出力形式",
                     options=['日別', '週別'],
@@ -487,11 +504,12 @@ class TransportPage:
                 )
                 
                 if st.button("📥 Excelダウンロード", type="secondary"):
+                    
                     try:
                         format_key = 'daily' if export_format == '日別' else 'weekly'
                         excel_data = self.service.export_loading_plan_to_excel(result, format_key)
-                        
-                        filename = f"積載計画_{export_format}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+                        filename = f"積載計画確認用_{export_format}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
                         
                         st.download_button(
                             label="⬇️ ダウンロード",
@@ -501,16 +519,16 @@ class TransportPage:
                         )
                     except Exception as e:
                         st.error(f"Excel出力エラー: {e}")
-            
+                st.write("**確認用、保存は左のボタン**")
             with col_export3:
-                st.write("**CSV出力**")
+                st.write("**CSV出力（確認用）**")
                 st.write("")
                 
                 if st.button("📄 CSVダウンロード", type="secondary"):
                     try:
                         csv_data = self.service.export_loading_plan_to_csv(result)
-                        
-                        filename = f"積載計画_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+
+                        filename = f"積載計画確認用_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
                         
                         st.download_button(
                             label="⬇️ ダウンロード",
@@ -521,7 +539,7 @@ class TransportPage:
 
                     except Exception as e:
                         st.error(f"CSV出力エラー: {e}")
-
+                st.write("**確認用、保存は左のボタン**")
             st.markdown("---")
             st.subheader("Excel修正の取り込み")
             st.write("Excelに出力した計画を修正した後、ここからアップロードすると数量変更を取り込みます。`編集キー`列（旧`edit_key`）は変更しないでください。編集可能な列は **コンテナ数**, **総数量**, **納品日** のみです。その他の列は書き換えないでください。")
@@ -592,9 +610,28 @@ class TransportPage:
         if unplanned_orders:
             st.warning(f"⚠️ 受注されたが積載されていない製品が {len(unplanned_orders)} 件あります")
             unplanned_df = pd.DataFrame(unplanned_orders)
+
+            # 不要な列を削除し、日本語列名に変更
+            columns_to_drop = ['order_id', 'customer_name', 'product_id']
+            unplanned_df = unplanned_df.drop(columns=[col for col in columns_to_drop if col in unplanned_df.columns], errors='ignore')
+
+            # 列名を日本語に変更
+            column_mapping = {
+                'product_code': '製品コード',
+                'product_name': '製品名',
+                'manual_planning_quantity':'手動計画',
+                'order_quantity': '受注数量',
+                'delivery_date': '納期',
+                'target_quantity': '目標数量',
+                'loaded_quantity': '出荷済数量',
+                'remaining_quantity':'未出荷数量',
+                'status': 'ステータス'
+            }
+            unplanned_df = unplanned_df.rename(columns=column_mapping)
+
             st.dataframe(
                 unplanned_df,
-                width='stretch',
+                use_container_width=True,
                 hide_index=True
             )
             st.markdown("---")
@@ -682,7 +719,7 @@ class TransportPage:
                                 st.download_button(
                                     label="⬇️ Excelダウンロード",
                                     data=excel_buffer,
-                                    file_name=f"積載計画_{plan_data.get('plan_name', '無題')}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                    file_name=f"{plan_data.get('plan_name', '無題')}.xlsx",
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                     use_container_width=True,
                                     key=f"excel_dl_{plan_data.get('id', 'current')}"
@@ -694,7 +731,7 @@ class TransportPage:
                                 st.download_button(
                                     label="⬇️ PDFダウンロード",
                                     data=pdf_buffer,
-                                    file_name=f"積載計画_{plan_data.get('plan_name', '無題')}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                                    file_name=f"{plan_data.get('plan_name', '無題')}.pdf",
                                     mime="application/pdf",
                                     use_container_width=True,
                                     key=f"pdf_dl_{plan_data.get('id', 'current')}"
@@ -715,7 +752,7 @@ class TransportPage:
                                 st.download_button(
                                     label="⬇️ Excelダウンロード",
                                     data=excel_buffer,
-                                    file_name=f"積載計画_{plan_data.get('plan_name', '無題')}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                    file_name=f"{plan_data.get('plan_name', '無題')}.xlsx",
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                     use_container_width=True,
                                     key=f"excel_both_{plan_data.get('id', 'current')}"
@@ -724,7 +761,7 @@ class TransportPage:
                                 st.download_button(
                                     label="⬇️ PDFダウンロード",
                                     data=pdf_buffer,
-                                    file_name=f"積載計画_{plan_data.get('plan_name', '無題')}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                                    file_name=f"{plan_data.get('plan_name', '無題')}.pdf",
                                     mime="application/pdf",
                                     use_container_width=True,
                                     key=f"pdf_both_{plan_data.get('id', 'current')}"
@@ -800,8 +837,6 @@ class TransportPage:
                 for truck_idx, truck in enumerate(day_plan.get('trucks', [])):
                     truck_name = truck.get('truck_name', '不明')
                     utilization = truck.get('utilization', {})
-                    
-                    st.write(f"  🚛 トラック: {truck_name}, アイテム数: {len(truck.get('loaded_items', []))}")
                     
                     for item_idx, item in enumerate(truck.get('loaded_items', [])):
                         # 納期のフォーマット処理
@@ -1012,7 +1047,6 @@ class TransportPage:
             st.error(f"計画表示エラー: {str(e)}")
             import traceback
             st.code(traceback.format_exc())
-
 
     def _export_plan_to_pdf(self, plan_data: Dict):
         """積載計画をPDFとしてエクスポート（日本語対応）"""
@@ -1328,7 +1362,7 @@ class TransportPage:
 # ui/pages/transport_page.py の _show_daily_view メソッドを修正
 
     def _show_daily_view(self, daily_plans):
-        """日別表示 - デバッグ出力追加版"""
+        """日別表示"""
         
         for date_str in sorted(daily_plans.keys()):
             plan = daily_plans[date_str]
@@ -1351,10 +1385,6 @@ class TransportPage:
                 for i, truck_plan in enumerate(trucks, 1):
                     st.markdown(f"**🚛 便 #{i}: {truck_plan.get('truck_name', 'トラック名不明')}**")
                     
-                    # ✅ デバッグ: truck_planの構造を確認
-                    st.write("🔍 デバッグ: truck_plan構造")
-                    st.json(truck_plan)
-                    
                     util = truck_plan.get('utilization', {})
                     col_u1, col_u2 = st.columns(2)
                     with col_u1:
@@ -1363,12 +1393,6 @@ class TransportPage:
                         st.metric("体積積載率", f"{util.get('volume_rate', 0)}%")
                     
                     loaded_items = truck_plan.get('loaded_items', [])
-                    
-                    # ✅ デバッグ: loaded_itemsの中身を確認
-                    st.write(f"🔍 デバッグ: loaded_items数 = {len(loaded_items)}")
-                    if loaded_items:
-                        st.write("🔍 デバッグ: 最初のitem構造")
-                        st.json(loaded_items[0])
                     
                     if loaded_items:
                         # ✅ 修正: container_nameフィールドも確認
