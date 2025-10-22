@@ -282,7 +282,7 @@ class DeliveryProgressPage:
                         disabled=['urgency', 'product_code', 'product_name', 'delivery_date', 'order_quantity', 'planned_quantity', 'planned_progress', 'shipped_quantity', 'actual_progress', 'remaining_quantity', 'status'],
                         key="manual_plan_editor",
                     )
-                    st.caption("手動計画列のみ編集できます。空欄にすると自動計画に戻ります。")
+                    st.markdown(":red[手動計画列のみ編集できます。注意：１増減分ではなく、変更後の数値を入力。２　キャンセルするとき、０入力ではなくNoneなるように消す]")
 
                     if st.button("手動計画を保存", type="primary", key="save_manual_plans", disabled=not can_edit):
                         updated_count = 0
