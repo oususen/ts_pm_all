@@ -10,6 +10,13 @@ import os
 import logging
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, asdict
+from pathlib import Path
+from dotenv import load_dotenv
+
+# .envファイルを読み込む（プロジェクトルートから）
+BASE_DIR = Path(__file__).resolve().parent
+ENV_PATH = BASE_DIR / '.env'
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 # -------------------------
 # 環境判定
@@ -66,8 +73,12 @@ class DatabaseConfig:
 # -------------------------
 # アプリケーション設定
 # -------------------------
+'''
 @dataclass
 class AppConfig:
+    page_title: str = "生産計画管理システム"
+    page_icon: str = "🏭"
+    layout: str = "wide"
     window_title: str = "生産管理システム"
     window_size: str = "1200x800"
     default_font: str = "Meiryo UI"
@@ -80,7 +91,25 @@ class AppConfig:
     data_directory: str = "data"
     backup_directory: str = "backups"
     export_directory: str = "exports"
-
+'''
+@dataclass
+class AppConfig:
+    """アプリケーション設定"""
+    page_title: str = "生産計画管理システム"
+    page_icon: str = "🏭"
+    layout: str = "wide"
+    log_level: str = "INFO"
+    window_title: str = "生産管理システム"
+    window_size: str = "1200x800"
+    default_font: str = "Meiryo UI"
+    font_size: int = 10
+    theme: str = "clam"
+    log_file: str = "production_system.log"
+    log_max_size: int = 10  # MB
+    log_backup_count: int = 5
+    data_directory: str = "data"
+    backup_directory: str = "backups"
+    export_directory: str = "exports"
 
 # -------------------------
 # フォーマット設定
@@ -184,18 +213,19 @@ def build_db_config() -> DatabaseConfig:
         user = os.getenv("PROD_DB_USER")
         password = os.getenv("PROD_DB_PASSWORD")
         database = os.getenv("PROD_DB_NAME", "kubota_prod")
+        port = int(os.getenv("PROD_DB_PORT", "3306"))
         if not all([host, user, password]):
             raise RuntimeError("本番環境では PROD_DB_* をすべて設定してください")
         cfg = DatabaseConfig(host=host, user=user, password=password, database=database,
-                             pool_size=20, pool_min_cached=5)
+                             port=port, pool_size=20, pool_min_cached=5)
     else:
+        # 開発環境：DEV_DB_* を優先、パスワードのみ PRIMARY_DB_PASSWORD を使用
         host = os.getenv("DEV_DB_HOST", "localhost")
         user = os.getenv("DEV_DB_USER", "root")
-        password = os.getenv("DEV_DB_PASSWORD", "")
-        database = os.getenv("DEV_DB_NAME", "kubota_dev")
-        cfg = DatabaseConfig(host=host, user=user, password=password, database=database)
-    if os.getenv("DB_PORT"):
-        cfg.port = int(os.getenv("DB_PORT"))
+        password = os.getenv("PRIMARY_DB_PASSWORD") or os.getenv("DEV_DB_PASSWORD", "")
+        database = os.getenv("DEV_DB_NAME", "kubota_db")
+        port = int(os.getenv("DEV_DB_PORT", "3306"))
+        cfg = DatabaseConfig(host=host, user=user, password=password, database=database, port=port)
     return cfg
 
 
@@ -273,11 +303,11 @@ MULTI_DB_CONFIG = build_multi_db_config()
 if IS_PROD:
     SYSTEM_CONFIG.debug_mode = False
     APP_CONFIG.log_level = "INFO"
-    APP_CONFIG.window_title += " - 本番環境"
+    APP_CONFIG.page_title += " - 本番環境"
 else:
     SYSTEM_CONFIG.debug_mode = True
     APP_CONFIG.log_level = "DEBUG"
-    APP_CONFIG.window_title += " - 開発環境"
+    APP_CONFIG.page_title += " - 開発環境"
 
 # -------------------------
 # 互換用エイリアス

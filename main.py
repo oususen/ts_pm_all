@@ -14,7 +14,7 @@ from ui.pages.transport_page import TransportPage
 from ui.pages.delivery_progress_page import DeliveryProgressPage
 from ui.pages.login_page import LoginPage
 from ui.pages.user_management_page import UserManagementPage
-from config import APP_CONFIG
+from config_all import APP_CONFIG
 from ui.pages.calendar_page import CalendarPage
 
 class ProductionPlanningApp:

@@ -1,7 +1,7 @@
 # app/repository/database_manager.py
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, scoped_session
-from config import DB_CONFIG
+from config_all import DB_CONFIG
 import pandas as pd
 
 class DatabaseManager:
