@@ -47,18 +47,26 @@ class ProductPage:
             products = self.production_service.get_all_products()
             containers = self.transport_service.get_containers()
             trucks_df = self.transport_service.get_trucks()
-            
+            product_groups_df = self.production_service.get_product_groups()
+
             if not products:
                 st.info("登録されている製品がありません")
                 return
-            
+
             # 容器マップ作成
             container_map = {c.id: c.name for c in containers} if containers else {}
             container_name_to_id = {c.name: c.id for c in containers} if containers else {}
-            
+
             # トラックマップ作成
             truck_map = dict(zip(trucks_df['id'], trucks_df['name'])) if not trucks_df.empty else {}
             truck_name_to_id = dict(zip(trucks_df['name'], trucks_df['id'])) if not trucks_df.empty else {}
+
+            # 製品群マップ作成
+            product_group_map = {}
+            product_group_name_to_id = {}
+            if not product_groups_df.empty:
+                product_group_map = dict(zip(product_groups_df['id'], product_groups_df['group_name']))
+                product_group_name_to_id = dict(zip(product_groups_df['group_name'], product_groups_df['id']))
             
             # DataFrame作成 - デフォルト値の設定を強化
             products_data = []
@@ -69,11 +77,15 @@ class ProductPage:
                 # トラックIDの取得（様々な属性名に対応）
                 used_truck_ids = getattr(p, 'used_truck_ids', None) or getattr(p, 'truck_ids', None)
                 
+                # 製品群IDの取得
+                product_group_id = getattr(p, 'product_group_id', None)
+
                 # その他の属性も同様に取得
                 product_data = {
                     'ID': p.id,
                     '製品コード': getattr(p, 'product_code', '') or '',
                     '製品名': getattr(p, 'product_name', '') or '',
+                    '製品群': product_group_map.get(product_group_id, '未設定') if product_group_id else '未設定',
                     '使用容器': container_map.get(used_container_id, '未設定') if used_container_id else '未設定',
                     '入り数': int(getattr(p, 'capacity', 0) or 0),
                     '検査区分': getattr(p, 'inspection_category', 'N') or 'N',
@@ -123,6 +135,12 @@ class ProductPage:
                     "ID": st.column_config.NumberColumn("ID", disabled=True),
                     "製品コード": st.column_config.TextColumn("製品コード", width="medium", required=True),
                     "製品名": st.column_config.TextColumn("製品名", width="medium", required=True),
+                    "製品群": st.column_config.SelectboxColumn(
+                        "製品群",
+                        options=['未設定'] + list(product_group_name_to_id.keys()),
+                        width="medium",
+                        help="この製品が属する製品群を選択"
+                    ),
                     "使用容器": st.column_config.SelectboxColumn(
                         "使用容器",
                         options=['未設定'] + list(container_name_to_id.keys()),
@@ -157,7 +175,8 @@ class ProductPage:
                         original_df=products_df,
                         edited_df=edited_df,
                         container_name_to_id=container_name_to_id,
-                        truck_name_to_id=truck_name_to_id
+                        truck_name_to_id=truck_name_to_id,
+                        product_group_name_to_id=product_group_name_to_id
                     )
                     
                     if changes_saved:
@@ -195,30 +214,40 @@ class ProductPage:
             import traceback
             st.code(traceback.format_exc())
     
-    def _save_product_changes(self, original_df, edited_df, container_name_to_id, truck_name_to_id):
+    def _save_product_changes(self, original_df, edited_df, container_name_to_id, truck_name_to_id, product_group_name_to_id=None):
         """マトリックスの変更をデータベースに保存"""
-        
+
         changes_made = False
-        
+
         for idx, edited_row in edited_df.iterrows():
             if idx >= len(original_df):
                 # 新規行の場合（スキップまたは新規登録処理）
                 continue
-            
+
             original_row = original_df.iloc[idx]
             product_id = int(edited_row['ID'])
-            
+
             # 変更があったか確認
             update_data = {}
-            
+
             # 製品コード
             if edited_row['製品コード'] != original_row['製品コード']:
                 update_data['product_code'] = edited_row['製品コード']
-            
+
             # 製品名
             if edited_row['製品名'] != original_row['製品名']:
                 update_data['product_name'] = edited_row['製品名']
-            
+
+            # 製品群
+            if product_group_name_to_id and '製品群' in edited_row:
+                new_group_name = edited_row['製品群']
+                original_group_name = original_row['製品群']
+                if new_group_name != original_group_name:
+                    if new_group_name == '未設定':
+                        update_data['product_group_id'] = None
+                    else:
+                        update_data['product_group_id'] = product_group_name_to_id.get(new_group_name)
+
             # 使用容器
             new_container_name = edited_row['使用容器']
             original_container_name = original_row['使用容器']

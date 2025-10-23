@@ -12,11 +12,12 @@ Base = declarative_base()
 class ProductORM(Base):
     """製品テーブル - SQLAlchemy ORM（実テーブル構造に完全一致）"""
     __tablename__ = "products"
-    
+
     # ✅ 実際のテーブルに存在するカラムのみ定義
     id = Column(Integer, primary_key=True, autoincrement=True)
     product_code = Column(String(50))
     product_name = Column(String(200))
+    product_group_id = Column(Integer)  # 製品群ID
     delivery_location = Column(String(100))
     box_type = Column(String(20))
     capacity = Column(Integer)
@@ -59,7 +60,7 @@ class ProductRepository:
             query = """
             SELECT
                 id, product_code, product_name,
-                display_id,
+                display_id, product_group_id,
                 used_container_id, used_truck_ids,
                 capacity, inspection_category, can_advance,
                 stackable,
@@ -67,16 +68,16 @@ class ProductRepository:
             FROM products
             ORDER BY COALESCE(display_id, 0), product_code
             """
-            
+
             result = self.db.execute_query(query)
-            
+
             print(f"🔍 デバッグ: 製品データ取得 - {len(result)}件")
-            
+
             if result.empty:
                 print("⚠️ 警告: 製品データが0件")
-            
+
             return result
-            
+
         except Exception as e:
             print(f"❌ 製品データ取得エラー: {e}")
             return pd.DataFrame()
@@ -158,6 +159,7 @@ class ProductRepository:
             product = ProductORM(
                 product_code=product_data.get("product_code"),
                 product_name=product_data.get("product_name"),
+                product_group_id=product_data.get("product_group_id"),
                 inspection_category=category,
                 capacity=product_data.get("capacity", 0),
                 container_width=product_data.get("container_width", 0),
@@ -255,3 +257,28 @@ class ProductRepository:
             return None
         finally:
             session.close()
+
+    def get_product_groups(self) -> pd.DataFrame:
+        """製品群一覧を取得"""
+        try:
+            query = """
+            SELECT
+                id,
+                group_code,
+                group_name,
+                description,
+                enable_container_management,
+                enable_transport_planning,
+                enable_progress_tracking,
+                enable_inventory_management,
+                is_active,
+                display_order
+            FROM product_groups
+            WHERE is_active = TRUE
+            ORDER BY display_order, group_code
+            """
+            result = self.db.execute_query(query)
+            return result
+        except Exception as e:
+            print(f"製品群データ取得エラー: {e}")
+            return pd.DataFrame()

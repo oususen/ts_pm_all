@@ -123,5 +123,7 @@ class ProductionService:
     def delete_product(self, product_id: int) -> bool:
         """製品を削除"""
         return self.product_repo.delete_product(product_id) or False
-    
-    
+
+    def get_product_groups(self):
+        """製品群一覧を取得"""
+        return self.product_repo.get_product_groups()
