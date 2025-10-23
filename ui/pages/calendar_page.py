@@ -250,19 +250,20 @@ class CalendarPage:
         
         with col_a:
             st.subheader("🚫 休日を追加")
-            
+
             with st.form("add_holiday_form"):
-                holiday_date = st.date_input("日付")
-                day_type = st.selectbox(
+                holiday_date = st.date_input("日付", key="holiday_date")
+                holiday_day_type = st.selectbox(
                     "区分",
-                    options=['祝日', '休日', '特別休業']
+                    options=['祝日', '休日', '特別休業', '年末年始', 'GW', '夏季休暇', '会社休日'],
+                    key="holiday_day_type"
                 )
-                day_name = st.text_input("名称", placeholder="例: 創立記念日")
-                notes = st.text_area("備考")
-                
+                holiday_day_name = st.text_input("名称", placeholder="例: 創立記念日", key="holiday_day_name")
+                holiday_notes = st.text_area("備考", placeholder="例: 追加の備考", key="holiday_notes")
+
                 if st.form_submit_button("休日を追加", type="primary"):
                     success = self.calendar_repo.add_holiday(
-                        holiday_date, day_type, day_name, notes
+                        holiday_date, holiday_day_type, holiday_day_name, holiday_notes
                     )
                     if success:
                         st.success(f"✅ {holiday_date} を休日として登録しました")
@@ -273,20 +274,47 @@ class CalendarPage:
         with col_b:
             st.subheader("✅ 営業日を追加")
             st.write("土日や祝日を営業日にする場合に使用")
-            
+
             with st.form("add_working_day_form"):
                 working_date = st.date_input("日付", key="working_date")
-                working_notes = st.text_area("備考", placeholder="例: 祝日振替出勤", key="working_notes")
-                
+                working_day_type = st.selectbox(
+                    "区分",
+                    options=['営業日', '振替出勤', '特別営業日', '臨時営業日'],
+                    key="working_day_type"
+                )
+                working_day_name = st.text_input("名称", placeholder="例: 祝日振替出勤日", key="working_day_name")
+                working_notes = st.text_area("備考", placeholder="例: 追加の備考", key="working_notes")
+
                 if st.form_submit_button("営業日を追加", type="primary"):
-                    success = self.calendar_repo.add_working_day(
-                        working_date, working_notes
-                    )
-                    if success:
+                    # add_working_dayメソッドを拡張して使用するか、add_calendar_entryメソッドを使用
+                    session = self.calendar_repo.db.get_session()
+                    try:
+                        from sqlalchemy import text
+                        query = text("""
+                            INSERT INTO company_calendar
+                            (calendar_date, day_type, day_name, is_working_day, notes)
+                            VALUES (:date, :day_type, :day_name, TRUE, :notes)
+                            ON DUPLICATE KEY UPDATE
+                                day_type = VALUES(day_type),
+                                day_name = VALUES(day_name),
+                                is_working_day = TRUE,
+                                notes = VALUES(notes)
+                        """)
+
+                        session.execute(query, {
+                            'date': working_date,
+                            'day_type': working_day_type,
+                            'day_name': working_day_name,
+                            'notes': working_notes
+                        })
+                        session.commit()
                         st.success(f"✅ {working_date} を営業日として登録しました")
                         st.rerun()
-                    else:
-                        st.error("営業日追加に失敗しました")
+                    except Exception as e:
+                        session.rollback()
+                        st.error(f"営業日追加に失敗しました: {e}")
+                    finally:
+                        session.close()
     
     def _show_yearly_summary(self):
         """年間サマリー"""
