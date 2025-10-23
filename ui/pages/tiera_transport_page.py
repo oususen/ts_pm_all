@@ -525,25 +525,27 @@ class TieraTransportPage(TransportPage):
 
         # 特殊行のスタイル
         # 午前便ヘッダー
-        style.add('FONTNAME', (0, morning_header), (0, morning_header), 'Japanese-Bold')
+        style.add('FONTNAME', (0, morning_header), (-1, morning_header), 'Japanese-Bold')
         style.add('ALIGN', (0, morning_header), (0, morning_header), 'LEFT')
-        style.add('BACKGROUND', (0, morning_header), (0, morning_header), colors.white)
+        style.add('BACKGROUND', (0, morning_header), (-1, morning_header), colors.lightblue)
 
         # 午前便合計行
         style.add('FONTNAME', (0, morning_total), (-1, morning_total), 'Japanese-Bold')
-        style.add('BACKGROUND', (0, morning_total), (0, morning_total), colors.lightyellow)
+        style.add('BACKGROUND', (0, morning_total), (-1, morning_total), colors.lightyellow)
+        
 
-        # 午後便ヘッダー
-        style.add('FONTNAME', (0, evening_header), (0, evening_header), 'Japanese-Bold')
+        # 午後便ヘッダー（青色）
+        style.add('FONTNAME', (0, evening_header), (-1, evening_header), 'Japanese-Bold')
         style.add('ALIGN', (0, evening_header), (0, evening_header), 'LEFT')
-        style.add('BACKGROUND', (0, evening_header), (0, evening_header), colors.white)
+        style.add('BACKGROUND', (0, evening_header), (-1, evening_header), colors.lightblue)
 
         # 午後便合計行
         style.add('FONTNAME', (0, evening_total), (-1, evening_total), 'Japanese-Bold')
-        style.add('BACKGROUND', (0, evening_total), (0, evening_total), colors.lightyellow)
+        style.add('BACKGROUND', (0, evening_total), (-1, evening_total), colors.lightyellow)
 
         # 出荷数合計行
         style.add('BACKGROUND', (0, grand_total), (0, grand_total), colors.orange)
         style.add('FONTNAME', (0, grand_total), (-1, grand_total), 'Japanese-Bold')
+        style.add('BACKGROUND', (0, grand_total), (-1, grand_total), colors.orange)
 
         return style
