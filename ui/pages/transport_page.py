@@ -472,17 +472,29 @@ class TransportPage:
         if 'loading_plan' in st.session_state:
             result = st.session_state['loading_plan']
             summary = result.get('summary', {})
-            
+
+            # 期間から開始日と終了日を取得
+            period = result.get('period', '')
+            period_suffix = ""
+            if period and ' ~ ' in period:
+                try:
+                    start_date_str, end_date_str = period.split(' ~ ')
+                    start_date_fmt = start_date_str.replace('-', '')
+                    end_date_fmt = end_date_str.replace('-', '')
+                    period_suffix = f"{start_date_fmt}_{end_date_fmt}_"
+                except:
+                    pass
+
             st.markdown("---")
             st.subheader("💾 計画の保存とエクスポート")
-            
+
             col_export1, col_export2, col_export3 = st.columns(3)
-            
+
             with col_export1:
                 st.write("**DBに保存**")
                 plan_name = st.text_input(
                     "計画名",
-                    value=f"積載計画_{datetime.now().strftime('%Y%m%d_%H%M')}",
+                    value=f"積載計画_{period_suffix}{datetime.now().strftime('%Y%m%d_%H%M')}",
                     key="plan_name_save"
                 )
                 
@@ -504,12 +516,12 @@ class TransportPage:
                 )
                 
                 if st.button("📥 Excelダウンロード", type="secondary"):
-                    
+
                     try:
                         format_key = 'daily' if export_format == '日別' else 'weekly'
                         excel_data = self.service.export_loading_plan_to_excel(result, format_key)
 
-                        filename = f"積載計画確認用_{export_format}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+                        filename = f"積載計画確認用_{export_format}_{period_suffix}{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
                         
                         st.download_button(
                             label="⬇️ ダウンロード",
@@ -528,7 +540,7 @@ class TransportPage:
                     try:
                         csv_data = self.service.export_loading_plan_to_csv(result)
 
-                        filename = f"積載計画確認用_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+                        filename = f"積載計画確認用_{period_suffix}{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
                         
                         st.download_button(
                             label="⬇️ ダウンロード",
