@@ -26,8 +26,8 @@ class Product:
     inspection_category: Optional[str] = None
     # ordering_category: Optional[str] = None
     # regular_replenishment_category: Optional[str] = None
-    # lead_time: Optional[int] = None
-    # fixed_point_days: Optional[int] = None
+    lead_time_days: Optional[int] = None
+    fixed_point_days: Optional[int] = None
     # shipping_factory: Optional[str] = None
     # client_product_code: Optional[str] = None
     # purchasing_org: Optional[str] = None
@@ -52,6 +52,9 @@ class Product:
                 # tinyint(1)をboolに変換
                 if field_name in ['stackable', 'can_advance'] and isinstance(data[field_name], int):
                     valid_fields[field_name] = bool(data[field_name])
+                # intフィールドを明示的にint変換
+                elif field_name in ['lead_time_days', 'fixed_point_days']:
+                    valid_fields[field_name] = int(data[field_name])
                 else:
                     valid_fields[field_name] = data[field_name]
         return cls(**valid_fields)

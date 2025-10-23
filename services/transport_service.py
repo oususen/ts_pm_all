@@ -10,6 +10,7 @@ from repository.calendar_repository import CalendarRepository  # ✅ 追加
 from domain.calculators.transport_planner import TransportPlanner
 from domain.validators.loading_validator import LoadingValidator
 from domain.models.transport import LoadingItem
+from config_all import get_customer_transport_config  # ✅ 顧客別設定取得
 import pandas as pd
 from datetime import datetime
 from io import BytesIO
@@ -277,8 +278,20 @@ class TransportService:
         containers = self.get_containers()
         trucks_df = self.get_trucks()
         truck_container_rules = self.transport_repo.get_truck_container_rules()
-        
-        # ✅ カレンダーリポジトリを渡す
+
+        # ✅ 顧客別設定を取得してトラック優先順位を決定
+        truck_priority = 'morning'  # デフォルト（Kubota様）
+        try:
+            # CustomerDatabaseManagerの場合、現在の顧客を取得
+            if hasattr(self.db, 'get_current_customer'):
+                current_customer = self.db.get_current_customer()
+                transport_config = get_customer_transport_config(current_customer)
+                truck_priority = transport_config.truck_priority
+        except Exception as e:
+            # エラーが発生してもデフォルト値で続行
+            print(f"顧客設定取得エラー（デフォルト値を使用）: {e}")
+
+        # ✅ カレンダーリポジトリと顧客別設定を渡す
         result = self.planner.calculate_loading_plan_from_orders(
             orders_df=orders_df,
             products_df=products_df,
@@ -287,7 +300,8 @@ class TransportService:
             truck_container_rules=truck_container_rules,
             start_date=start_date,
             days=days,
-            calendar_repo=self.calendar_repo if use_calendar else None  # カレンダー渡す
+            calendar_repo=self.calendar_repo if use_calendar else None,  # カレンダー
+            truck_priority=truck_priority  # 顧客別トラック優先順位
         )
 
         self._annotate_loading_plan_items(result)

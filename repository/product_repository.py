@@ -25,6 +25,8 @@ class ProductORM(Base):
     container_height = Column(Integer)
     stackable = Column(Integer)  # tinyint(1)
     can_advance = Column(Integer)  # tinyint(1)
+    lead_time_days = Column(Integer)  # リードタイム日数
+    fixed_point_days = Column(Integer)  # 固定日数
     used_container_id = Column(Integer)
     used_truck_ids = Column(String(100))
     created_at = Column(TIMESTAMP)
@@ -55,11 +57,13 @@ class ProductRepository:
         """全製品を取得"""
         try:
             query = """
-            SELECT 
+            SELECT
                 id, product_code, product_name,
                 display_id,
                 used_container_id, used_truck_ids,
-                capacity, inspection_category, can_advance
+                capacity, inspection_category, can_advance,
+                stackable,
+                lead_time_days, fixed_point_days
             FROM products
             ORDER BY COALESCE(display_id, 0), product_code
             """
@@ -163,6 +167,8 @@ class ProductRepository:
                 used_container_id=product_data.get("used_container_id"),
                 used_truck_ids=product_data.get("used_truck_ids"),
                 can_advance=int(product_data.get("can_advance", False)),
+                lead_time_days=product_data.get("lead_time_days", 0),
+                fixed_point_days=product_data.get("fixed_point_days", 0),
                 delivery_location=product_data.get("delivery_location"),
                 box_type=product_data.get("box_type")
             )

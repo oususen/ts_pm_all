@@ -229,6 +229,96 @@ def build_db_config() -> DatabaseConfig:
     return cfg
 
 
+def build_customer_db_config(customer: str) -> DatabaseConfig:
+    """
+    顧客別のデータベース設定を生成
+
+    Args:
+        customer: 顧客名 ('kubota' または 'tiera')
+
+    Returns:
+        DatabaseConfig: 顧客別のDB設定
+    """
+    customer = customer.lower()
+
+    if customer not in ["kubota", "tiera"]:
+        raise ValueError(f"未対応の顧客名: {customer}. 'kubota' または 'tiera' を指定してください")
+
+    # 環境変数プレフィックスを設定
+    prefix = customer.upper()
+
+    # 共通パスワード取得（PRIMARY_DB_PASSWORD を優先）
+    password = os.getenv("PRIMARY_DB_PASSWORD") or os.getenv(f"{prefix}_DB_PASSWORD", "")
+
+    # 顧客別設定を取得
+    host = os.getenv(f"{prefix}_DB_HOST", "localhost")
+    user = os.getenv(f"{prefix}_DB_USER", "root")
+    database = os.getenv(f"{prefix}_DB_NAME", f"{customer}_db")
+    port = int(os.getenv(f"{prefix}_DB_PORT", "3306"))
+
+    cfg = DatabaseConfig(
+        host=host,
+        user=user,
+        password=password,
+        database=database,
+        port=port,
+        name=customer
+    )
+
+    logging.info(f"顧客別DB設定を構築: {customer} -> {database}@{host}")
+    return cfg
+
+
+def get_default_customer() -> str:
+    """デフォルトの顧客名を取得"""
+    return os.getenv("DEFAULT_CUSTOMER", "kubota").lower()
+
+
+@dataclass
+class CustomerTransportConfig:
+    """顧客別積載計画設定"""
+    truck_priority: str  # トラック優先順位 ('morning' または 'evening')
+
+
+def get_customer_transport_config(customer: str) -> CustomerTransportConfig:
+    """
+    顧客別の積載計画設定を取得
+
+    Args:
+        customer: 顧客名 ('kubota' または 'tiera')
+
+    Returns:
+        CustomerTransportConfig: 顧客別の積載計画設定
+
+    Note:
+        リードタイムは製品ごとにproductsテーブルのlead_time_days列から取得
+    """
+    customer = customer.lower()
+
+    if customer not in ["kubota", "tiera"]:
+        raise ValueError(f"未対応の顧客名: {customer}. 'kubota' または 'tiera' を指定してください")
+
+    # 環境変数プレフィックスを設定
+    prefix = customer.upper()
+
+    # 顧客別設定を取得
+    # Kubota様はトラック優先順位設定なし（デフォルト'morning'）
+    # Tiera様は.envから取得
+    truck_priority = os.getenv(f"{prefix}_TRUCK_PRIORITY", "morning").lower()
+
+    # truck_priorityの検証
+    if truck_priority not in ["morning", "evening"]:
+        logging.warning(f"無効なtruck_priority: {truck_priority}. デフォルト'morning'を使用します")
+        truck_priority = "morning"
+
+    cfg = CustomerTransportConfig(
+        truck_priority=truck_priority
+    )
+
+    logging.info(f"顧客別積載計画設定を取得: {customer} -> {truck_priority}便優先")
+    return cfg
+
+
 def ensure_app_dirs(app_cfg: AppConfig) -> None:
     """アプリ用ディレクトリを作成"""
     for d in (app_cfg.data_directory, app_cfg.backup_directory, app_cfg.export_directory):

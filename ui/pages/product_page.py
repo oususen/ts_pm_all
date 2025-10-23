@@ -77,7 +77,7 @@ class ProductPage:
                     '使用容器': container_map.get(used_container_id, '未設定') if used_container_id else '未設定',
                     '入り数': int(getattr(p, 'capacity', 0) or 0),
                     '検査区分': getattr(p, 'inspection_category', 'N') or 'N',
-                    'リードタイム': int(getattr(p, 'lead_time', 0) or 0),
+                    'リードタイム': int(getattr(p, 'lead_time_days', 0) or 0),
                     '固定日数': int(getattr(p, 'fixed_point_days', 0) or 0),
                     '前倒可': bool(getattr(p, 'can_advance', False)),
                     '使用トラック': ', '.join(self._get_truck_names_by_ids(used_truck_ids)) or '未設定'
@@ -134,7 +134,12 @@ class ProductPage:
                         options=['N', 'NS', 'F', 'FS', '$S', ''],
                         width="small"
                     ),
-                    "リードタイム": st.column_config.NumberColumn("リードタイム(日)", min_value=0, step=1),
+                    "リードタイム": st.column_config.NumberColumn(
+                        "リードタイム(日)",
+                        min_value=0,
+                        step=1,
+                        help="納品日の何日前に積載するか（0=納品日当日、2=2日前など）"
+                    ),
                     "固定日数": st.column_config.NumberColumn("固定日数(日)", min_value=0, step=1),
                     "前倒可": st.column_config.CheckboxColumn("前倒可"),
                     "使用トラック": st.column_config.TextColumn("使用トラック", width="medium", disabled=True, help="個別編集で設定してください")
@@ -233,7 +238,7 @@ class ProductPage:
             
             # リードタイム
             if int(edited_row['リードタイム']) != int(original_row['リードタイム']):
-                update_data['lead_time'] = int(edited_row['リードタイム'])
+                update_data['lead_time_days'] = int(edited_row['リードタイム'])
             
             # 固定日数
             if int(edited_row['固定日数']) != int(original_row['固定日数']):
@@ -278,7 +283,7 @@ class ProductPage:
             
             with col_info3:
                 st.write("**納期・制約**")
-                st.write(f"リードタイム: {getattr(product, 'lead_time', 0)} 日")
+                st.write(f"リードタイム: {getattr(product, 'lead_time_days', 0)} 日")
                 st.write(f"固定日数: {getattr(product, 'fixed_point_days', 0)} 日")
                 st.write(f"前倒可: {'✅' if getattr(product, 'can_advance', False) else '❌'}")
             

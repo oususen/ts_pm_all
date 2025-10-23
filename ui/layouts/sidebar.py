@@ -25,6 +25,37 @@ def create_sidebar(auth_service=None) -> str:
 
             st.markdown("---")
 
+            # 顧客選択UI
+            st.subheader("🏢 顧客選択")
+
+            customer_options = {
+                "クボタ": "kubota",
+                "ティエラ": "tiera"
+            }
+
+            # session_stateから現在の顧客を取得
+            current_customer = st.session_state.get('current_customer', 'kubota')
+            current_display = "クボタ" if current_customer == "kubota" else "ティエラ"
+
+            selected_display = st.selectbox(
+                "顧客を選択",
+                list(customer_options.keys()),
+                index=list(customer_options.keys()).index(current_display),
+                key="customer_selector"
+            )
+
+            # 顧客が変更されたら更新
+            new_customer = customer_options[selected_display]
+            if new_customer != st.session_state.get('current_customer'):
+                st.session_state['current_customer'] = new_customer
+                st.info(f"✅ {selected_display}様に切り替えました")
+                st.rerun()
+
+            # 現在の顧客を表示
+            st.success(f"現在: **{selected_display}様**")
+
+            st.markdown("---")
+
         # アクセス可能なページを取得
         available_pages = _get_available_pages(auth_service)
 

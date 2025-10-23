@@ -160,7 +160,13 @@ class FormComponents:
                     options=['N', 'NS', 'FS', 'F', "" '$S'],
                     index=0
                 )
-                lead_time = st.number_input("リードタイム (日)", min_value=0, value=0, step=1)
+                lead_time = st.number_input(
+                    "リードタイム (日)",
+                    min_value=0,
+                    value=0,
+                    step=1,
+                    help="納品日の何日前に積載するか（0=納品日当日、2=2日前など）"
+                )
                 fixed_point_days = st.number_input("固定日数 (日)", min_value=0, value=0, step=1)
             
             with col2:
@@ -208,7 +214,7 @@ class FormComponents:
                     "capacity": capacity,
                     "inspection_category": inspection_category,
                     "used_container_id": used_container_id,
-                    "lead_time": lead_time,
+                    "lead_time_days": lead_time,
                     "fixed_point_days": fixed_point_days,
                     "can_advance": can_advance,
                     "used_truck_ids": used_truck_ids,

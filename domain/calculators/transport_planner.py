@@ -43,9 +43,21 @@ class TransportPlanner:
                                           truck_container_rules: List[Any],
                                           start_date: date,
                                           days: int = TransportConstants.DEFAULT_PLANNING_DAYS,
-                                          calendar_repo=None) -> Dict[str, Any]:
-        """新ルールに基づく積載計画作成"""
+                                          calendar_repo=None,
+                                          truck_priority: str = 'morning') -> Dict[str, Any]:
+        """
+        新ルールに基づく積載計画作成
+
+        Args:
+            truck_priority: トラック優先順位 ('morning' または 'evening')
+                           - 'morning': 朝便優先（Kubota様）
+                           - 'evening': 夕便優先（Tiera様）
+
+        Note:
+            リードタイムは製品ごとにproductsテーブルのlead_time_days列から取得
+        """
         self.calendar_repo = calendar_repo
+        self.truck_priority = truck_priority
         # 営業日のみで計画期間を構築
         working_dates = self._get_working_dates(start_date, days, calendar_repo)
         # データ準備
@@ -297,8 +309,12 @@ class TransportPlanner:
             # 容器ごとの底面積計算（段積み考慮）
             floor_area_per_container = (container.width * container.depth) / TransportConstants.MM2_TO_M2
             max_stack = getattr(container, 'max_stack', 1)
-            
-            if max_stack > 1 and getattr(container, 'stackable', False):
+
+            # 段積み可否：製品と容器の両方がstackable=Trueで、max_stack>1の場合のみ
+            product_stackable = bool(product.get('stackable', 0))  # tinyint(1) -> bool
+            container_stackable = getattr(container, 'stackable', False)
+
+            if max_stack > 1 and product_stackable and container_stackable:
                 stacked_containers = (num_containers + max_stack - 1) // max_stack
                 total_floor_area_needed = floor_area_per_container * stacked_containers
             else:
@@ -313,10 +329,18 @@ class TransportPlanner:
             else:
                 truck_ids = [tid for tid, t in truck_map.items() if t.get('default_use', False)]
             
-            # 納期日を積載日として使用（arrival_day_offsetは最後に調整）
-            primary_loading_date = delivery_date
-            
-            # 営業日チェック
+            # 製品のリードタイムを取得（デフォルト0日）
+            try:
+                product_lead_time = int(product.get('lead_time_days', 0))
+                if pd.isna(product_lead_time):
+                    product_lead_time = 0
+            except (ValueError, TypeError):
+                product_lead_time = 0
+
+            # リードタイムを適用して積載日を計算（納品日 - リードタイム日数）
+            primary_loading_date = delivery_date - timedelta(days=product_lead_time)
+
+            # 営業日チェック（リードタイム適用後の日付が非営業日の場合、さらに前の営業日に移動）
             if self.calendar_repo:
                 for _ in range(TransportConstants.MAX_WORKING_DAY_SEARCH):
                     if self.calendar_repo.is_working_day(primary_loading_date):
@@ -339,8 +363,8 @@ class TransportPlanner:
                     'product_name': product.get('product_name', ''),
                     'container_id': container_id,
                     'num_containers': num_containers,
-                    'total_quantity': total_quantity ,  
-                    'calculated_quantity': total_quantity ,  # 計算値も同じ 
+                    'total_quantity': total_quantity ,
+                    'calculated_quantity': total_quantity ,  # 計算値も同じ
                     'capacity': capacity,
                     'remainder': remainder,  # 余りを保存
                     'surplus': surplus,  # 余剰を保存
@@ -350,7 +374,7 @@ class TransportPlanner:
                     'loading_date': primary_loading_date,
                     'truck_ids': truck_ids,
                     'max_stack': max_stack,
-                    'stackable': getattr(container, 'stackable', False),
+                    'stackable': product_stackable and container_stackable,  # ✅ 製品と容器の両方を確認
                     'can_advance': False if manual_fixed else bool(product.get('can_advance', 0)),
                     'manual_fixed': manual_fixed,
                     'manual_requested_quantity': manual_qty if manual_fixed else None,
@@ -430,15 +454,17 @@ class TransportPlanner:
                         if container:
                             floor_area_per_container = (container.width * container.depth) / TransportConstants.MM2_TO_M2
                             max_stack = getattr(container, 'max_stack', 1)
+                            # 段積み可否（需要データに既に製品と容器の両方を確認済み）
+                            is_stackable = demand.get('stackable', False)
                             # 段積み考慮で積載可能な容器数を計算
-                            if max_stack > 1 and getattr(container, 'stackable', False):
+                            if max_stack > 1 and is_stackable:
                                 max_stacks = int(remaining_capacity / floor_area_per_container)
                                 loadable_containers = max_stacks * max_stack
                             else:
                                 loadable_containers = int(remaining_capacity / floor_area_per_container)
                             if loadable_containers > 0:
                                 # 分割積載
-                                if max_stack > 1 and getattr(container, 'stackable', False):
+                                if max_stack > 1 and is_stackable:
                                     stacked = (loadable_containers + max_stack - 1) // max_stack
                                     loadable_floor_area = floor_area_per_container * stacked
                                 else:
@@ -618,8 +644,10 @@ class TransportPlanner:
                     if container:
                         floor_area_per_container = (container.width * container.depth) / TransportConstants.MM2_TO_M2
                         max_stack = getattr(container, 'max_stack', 1)
+                        # 段積み可否（需要データに既に製品と容器の両方を確認済み）
+                        is_stackable = remaining_demand.get('stackable', False)
                         # 段積み考慮で積載可能な容器数を計算
-                        if max_stack > 1 and getattr(container, 'stackable', False):
+                        if max_stack > 1 and is_stackable:
                             max_stacks = int(truck_state['remaining_floor_area'] / floor_area_per_container)
                             loadable_containers = max_stacks * max_stack
                         else:
@@ -629,15 +657,15 @@ class TransportPlanner:
                             capacity = remaining_demand.get('capacity', 1)
                             original_demand_quantity = demand.get('total_quantity', 0)
                             remaining_quantity = remaining_demand.get('total_quantity', 0)
-                            
+
                             # 積載可能数量の計算（最大容量と残り数量の小さい方）
                             max_loadable_quantity = min(loadable_containers * capacity, remaining_quantity)
                             loadable_quantity = min(max_loadable_quantity, remaining_quantity)
-                            
+
                             # 容器数を再計算（過剰な容器を割り当てない）
                             loadable_containers = (loadable_quantity + capacity - 1) // capacity
                             # 段積み後の底面積
-                            if max_stack > 1 and getattr(container, 'stackable', False):
+                            if max_stack > 1 and is_stackable:
                                 stacked = (loadable_containers + max_stack - 1) // max_stack
                                 loadable_floor_area = floor_area_per_container * stacked
                             else:
@@ -886,34 +914,47 @@ class TransportPlanner:
         def get_truck_priority(truck_id):
             truck_state = truck_states[truck_id]
             truck_info = truck_map[truck_id]
-            
+
             # 0. 納期に間に合うトラックを最優先
             if current_date and delivery_date:
                 if not self._can_arrive_on_time(truck_info, current_date, delivery_date):
-                    return (1, 9999, 1, 1, 0)  # 納期に間に合わないトラックは最低優先度
-            
+                    return (1, 9999, 9999, 1, 1, 0)  # 納期に間に合わないトラックは最低優先度
+
             # 1. 製品のused_truck_idsの順序を優先（インデックスが小さいほど優先）
             if truck_ids and truck_id in truck_ids:
                 truck_priority_index = truck_ids.index(truck_id)
             else:
                 truck_priority_index = 9999  # リストにない場合は低優先度
-            # 2. 優先積載製品に指定されている
+
+            # 2. トラック便優先順位（arrival_day_offset）
+            # - truck_priority='morning': arrival_day_offset=0（朝便/当日着）を優先
+            # - truck_priority='evening': arrival_day_offset=1（夕便/翌日着）を優先
+            arrival_offset = int(truck_info.get('arrival_day_offset', 0) or 0)
+            if self.truck_priority == 'evening':
+                # 夕便優先: arrival_day_offset=1を優先（0が最優先）
+                truck_time_priority = 0 if arrival_offset == 1 else 1
+            else:
+                # 朝便優先（デフォルト）: arrival_day_offset=0を優先（0が最優先）
+                truck_time_priority = 0 if arrival_offset == 0 else 1
+
+            # 3. 優先積載製品に指定されている
             if product_code in truck_state['priority_products']:
                 priority_product_flag = 0
             else:
                 priority_product_flag = 1
-            # 3. 同容器が既に積載されている
+            # 4. 同容器が既に積載されている
             if container_id in truck_state['loaded_container_ids']:
                 same_container_flag = 0
             else:
                 same_container_flag = 1
-            # 4. 空き容量（大きい方が優先）
+            # 5. 空き容量（大きい方が優先）
             remaining_area = truck_state['remaining_floor_area']
-            # 5. 現在の利用率（低い方を優先）
+            # 6. 現在の利用率（低い方を優先）
             utilized_area = truck_state['total_floor_area'] - truck_state['remaining_floor_area']
             utilization_rate = utilized_area / truck_state['total_floor_area'] if truck_state['total_floor_area'] else 0
             return (
                 truck_priority_index,
+                truck_time_priority,
                 priority_product_flag,
                 same_container_flag,
                 -remaining_area,
