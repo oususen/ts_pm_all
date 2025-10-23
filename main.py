@@ -10,6 +10,7 @@ from ui.pages.dashboard_page import DashboardPage
 from ui.pages.csv_import_page import CSVImportPage
 from ui.pages.constraints_page import ConstraintsPage
 from ui.pages.product_page import ProductPage
+from ui.pages.product_group_page import ProductGroupPage
 from ui.pages.production_page import ProductionPage
 from ui.pages.transport_page import TransportPage
 from ui.pages.tiera_transport_page import TieraTransportPage  # ✅ Tiera様専用
@@ -103,6 +104,7 @@ class ProductionPlanningApp:
             "ダッシュボード": DashboardPage(self.production_service),
             "CSV受注取込": CSVImportPage(self.db, self.auth_service),
             "製品管理": ProductPage(self.production_service, self.transport_service, self.auth_service),
+            "製品群管理": ProductGroupPage(self.production_service, self.auth_service),
             "制限設定": ConstraintsPage(self.production_service, self.auth_service),
             "生産計画": ProductionPage(self.production_service, self.transport_service, self.auth_service),
             "配送便計画": transport_page,  # ✅ 顧客別のTransportPage

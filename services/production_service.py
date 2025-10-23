@@ -1,5 +1,6 @@
 # app/services/production_service.py
-from typing import List
+from typing import List, Optional
+import pandas as pd
 from repository.product_repository import ProductRepository
 from repository.production_repository import ProductionRepository
 from domain.calculators.production_calculator import ProductionCalculator
@@ -124,6 +125,34 @@ class ProductionService:
         """製品を削除"""
         return self.product_repo.delete_product(product_id) or False
 
+
+    def get_all_product_groups(self, include_inactive: bool = True) -> pd.DataFrame:
+        """Fetch product groups; include inactive rows when required."""
+        try:
+            return self.product_repo.get_all_product_groups(include_inactive=include_inactive)
+        except Exception as e:
+            st.error(f"Failed to retrieve product groups: {e}")
+            return pd.DataFrame()
+
+    def create_product_group(self, group_data: dict) -> Optional[int]:
+        """Create a new product group."""
+        try:
+            return self.product_repo.create_product_group(group_data)
+        except Exception as e:
+            st.error(f"Failed to create product group: {e}")
+            return None
+
+    def update_product_group(self, group_id: int, update_data: dict) -> bool:
+        """Update an existing product group."""
+        try:
+            return self.product_repo.update_product_group(group_id, update_data)
+        except Exception as e:
+            st.error(f"Failed to update product group: {e}")
+            return False
+
     def get_product_groups(self):
         """製品群一覧を取得"""
         return self.product_repo.get_product_groups()
+
+
+

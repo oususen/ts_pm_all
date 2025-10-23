@@ -1,7 +1,7 @@
 # app/repository/product_repository.py
 
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, text
+from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, Boolean, Text, text
 from sqlalchemy.orm import declarative_base
 import pandas as pd
 from typing import Optional
@@ -44,6 +44,27 @@ class ProductionConstraintORM(Base):
     smoothing_level = Column(Integer, nullable=False)
     volume_per_unit = Column(Integer, nullable=False)
     is_transport_constrained = Column(Integer, nullable=False, default=0)
+    created_at = Column(TIMESTAMP)
+    updated_at = Column(TIMESTAMP)
+
+
+class ProductGroupORM(Base):
+    """Product group table represented via SQLAlchemy ORM."""
+    __tablename__ = "product_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_code = Column(String(50), unique=True, nullable=False)
+    group_name = Column(String(100), unique=True, nullable=False)
+    description = Column(Text)
+    enable_container_management = Column(Boolean, default=True)
+    enable_transport_planning = Column(Boolean, default=True)
+    enable_progress_tracking = Column(Boolean, default=True)
+    enable_inventory_management = Column(Boolean, default=False)
+    default_lead_time_days = Column(Integer, default=2)
+    default_priority = Column(Integer, default=5)
+    is_active = Column(Boolean, default=True)
+    display_order = Column(Integer, default=0)
+    notes = Column(Text)
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
 
@@ -258,27 +279,134 @@ class ProductRepository:
         finally:
             session.close()
 
-    def get_product_groups(self) -> pd.DataFrame:
-        """製品群一覧を取得"""
+    def get_all_product_groups(self, include_inactive: bool = True) -> pd.DataFrame:
+        """Return product groups; include inactive rows when requested."""
         try:
-            query = """
+            where_clause = "" if include_inactive else "WHERE pg.is_active = TRUE"
+            query = f"""
             SELECT
-                id,
-                group_code,
-                group_name,
-                description,
-                enable_container_management,
-                enable_transport_planning,
-                enable_progress_tracking,
-                enable_inventory_management,
-                is_active,
-                display_order
-            FROM product_groups
-            WHERE is_active = TRUE
-            ORDER BY display_order, group_code
+                pg.id,
+                pg.group_code,
+                pg.group_name,
+                pg.description,
+                pg.enable_container_management,
+                pg.enable_transport_planning,
+                pg.enable_progress_tracking,
+                pg.enable_inventory_management,
+                pg.default_lead_time_days,
+                pg.default_priority,
+                pg.is_active,
+                pg.display_order,
+                pg.notes,
+                pg.created_at,
+                pg.updated_at,
+                COALESCE(prod_stats.product_count, 0) AS product_count
+            FROM product_groups pg
+            LEFT JOIN (
+                SELECT
+                    product_group_id,
+                    COUNT(*) AS product_count
+                FROM products
+                WHERE product_group_id IS NOT NULL
+                GROUP BY product_group_id
+            ) prod_stats ON prod_stats.product_group_id = pg.id
+            {where_clause}
+            ORDER BY pg.display_order, pg.group_code
             """
             result = self.db.execute_query(query)
             return result
         except Exception as e:
-            print(f"製品群データ取得エラー: {e}")
+            print(f"Failed to fetch product group data: {e}")
             return pd.DataFrame()
+
+    def create_product_group(self, group_data: dict) -> Optional[int]:
+        """Persist a newly created product group."""
+        session = self.db.get_session()
+        try:
+            default_lead_time = group_data.get("default_lead_time_days")
+            default_priority = group_data.get("default_priority")
+            display_order = group_data.get("display_order")
+
+            group = ProductGroupORM(
+                group_code=group_data.get("group_code"),
+                group_name=group_data.get("group_name"),
+                description=group_data.get("description") or None,
+                enable_container_management=bool(group_data.get("enable_container_management", True)),
+                enable_transport_planning=bool(group_data.get("enable_transport_planning", True)),
+                enable_progress_tracking=bool(group_data.get("enable_progress_tracking", True)),
+                enable_inventory_management=bool(group_data.get("enable_inventory_management", False)),
+                default_lead_time_days=int(default_lead_time) if default_lead_time not in (None, "") else None,
+                default_priority=int(default_priority) if default_priority not in (None, "") else None,
+                is_active=bool(group_data.get("is_active", True)),
+                display_order=int(display_order) if display_order not in (None, "") else None,
+                notes=group_data.get("notes") or None
+            )
+
+            session.add(group)
+            session.commit()
+            return group.id
+        except SQLAlchemyError as e:
+            session.rollback()
+            print(f"Failed to create product group: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+        finally:
+            session.close()
+
+    def update_product_group(self, group_id: int, update_data: dict) -> bool:
+        """Update an existing product group."""
+        session = self.db.get_session()
+        try:
+            group = session.get(ProductGroupORM, group_id)
+            if not group:
+                print(f"[WARN] Product group not found: ID={group_id}")
+                return False
+
+            bool_fields = {
+                "enable_container_management",
+                "enable_transport_planning",
+                "enable_progress_tracking",
+                "enable_inventory_management",
+                "is_active"
+            }
+            int_fields = {
+                "default_lead_time_days",
+                "default_priority",
+                "display_order"
+            }
+
+            for key, value in update_data.items():
+                if not hasattr(group, key):
+                    print(f"[WARN] Unknown attribute '{key}' on ProductGroupORM; skipping.")
+                    continue
+
+                if value == "":
+                    value = None
+
+                if key in bool_fields and value is not None:
+                    value = bool(value)
+
+                if key in int_fields and value is not None:
+                    try:
+                        value = int(value)
+                    except (TypeError, ValueError):
+                        print(f"[WARN] Invalid integer value for '{key}': {value}")
+                        continue
+
+                setattr(group, key, value)
+
+            session.commit()
+            return True
+        except SQLAlchemyError as e:
+            session.rollback()
+            print(f"Failed to update product group: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+        finally:
+            session.close()
+
+    def get_product_groups(self) -> pd.DataFrame:
+        """Return only active product groups."""
+        return self.get_all_product_groups(include_inactive=False)

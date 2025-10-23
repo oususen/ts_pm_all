@@ -106,6 +106,7 @@ class AuthService:
                     {'page_name': 'ダッシュボード', 'can_view': True, 'can_edit': True},
                     {'page_name': 'CSV受注取込', 'can_view': True, 'can_edit': True},
                     {'page_name': '製品管理', 'can_view': True, 'can_edit': True},
+                    {'page_name': '製品群管理', 'can_view': True, 'can_edit': True},
                     {'page_name': '制限設定', 'can_view': True, 'can_edit': True},
                     {'page_name': '生産計画', 'can_view': True, 'can_edit': True},
                     {'page_name': '配送便計画', 'can_view': True, 'can_edit': True},
