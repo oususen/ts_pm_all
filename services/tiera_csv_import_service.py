@@ -293,10 +293,29 @@ class TieraCSVImportService:
                 if not product_id:
                     continue
 
-                # オーダーIDを生成
+                # オーダーIDを生成（内示CSV用）
                 order_id = f"TIERA-{delivery_date.strftime('%Y%m%d')}-{drawing_no}"
 
-                # 既存チェック
+                # 確定データのorder_id（重複チェック用）
+                kakutei_order_id = f"TIERA-KAKUTEI-{delivery_date.strftime('%Y%m%d')}-{drawing_no}"
+
+                # ✅ 同じ製品・納期の確定データが既にある場合はスキップ（確定データを優先）
+                kakutei_exists = session.execute(text("""
+                    SELECT id FROM delivery_progress
+                    WHERE product_id = :product_id
+                      AND delivery_date = :delivery_date
+                      AND order_id = :kakutei_order_id
+                """), {
+                    'product_id': product_id,
+                    'delivery_date': delivery_date,
+                    'kakutei_order_id': kakutei_order_id
+                }).fetchone()
+
+                if kakutei_exists:
+                    print(f"  ⏩ スキップ: {drawing_no} 納期={delivery_date} (確定データが既に存在)")
+                    continue
+
+                # 既存の内示データをチェック
                 existing = session.execute(text("""
                     SELECT id, order_quantity FROM delivery_progress
                     WHERE order_id = :order_id
@@ -312,7 +331,7 @@ class TieraCSVImportService:
                     """), {
                         'progress_id': existing[0],
                         'new_quantity': quantity,
-                        'notes': f'ティエラ様図番: {drawing_no} (更新)'
+                        'notes': f'ティエラ様図番（内示）: {drawing_no} (更新)'
                     })
                 else:
                     # 新規登録
@@ -332,8 +351,8 @@ class TieraCSVImportService:
                         'delivery_date': delivery_date,
                         'order_quantity': quantity,
                         'customer_code': 'TIERA',
-                        'customer_name': 'ティエラ様',
-                        'notes': f'図番: {drawing_no}'
+                        'customer_name': 'ティエラ様（内示）',
+                        'notes': f'図番: {drawing_no} (内示CSV)'
                     })
 
                 progress_count += 1

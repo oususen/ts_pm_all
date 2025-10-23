@@ -19,7 +19,7 @@ class TieraKakuteiCSVImportService:
     # 列インデックス定義
     COL_DRAWING_NO = 11      # 図番
     COL_DELIVERY_DATE = 13   # 納期
-    COL_QUANTITY = 16        # 数量
+    COL_QUANTITY = 15        # 数量
     COL_PRODUCT_NAME_JP = 46  # 品名（日本語）
     COL_PRODUCT_NAME_EN = 47  # 品名（英語）
 
@@ -296,7 +296,25 @@ class TieraKakuteiCSVImportService:
                 # オーダーIDを生成（確定CSV用）
                 order_id = f"TIERA-KAKUTEI-{delivery_date.strftime('%Y%m%d')}-{drawing_no}"
 
-                # 既存チェック
+                # 内示データのorder_id（重複チェック用）
+                naiji_order_id = f"TIERA-{delivery_date.strftime('%Y%m%d')}-{drawing_no}"
+
+                # ✅ 同じ製品・納期の内示データを削除（確定データを優先）
+                deleted_rows = session.execute(text("""
+                    DELETE FROM delivery_progress
+                    WHERE product_id = :product_id
+                      AND delivery_date = :delivery_date
+                      AND order_id = :naiji_order_id
+                """), {
+                    'product_id': product_id,
+                    'delivery_date': delivery_date,
+                    'naiji_order_id': naiji_order_id
+                }).rowcount
+
+                if deleted_rows > 0:
+                    print(f"  🔄 内示データを削除: {drawing_no} 納期={delivery_date} (確定データで置換)")
+
+                # 既存の確定データをチェック
                 existing = session.execute(text("""
                     SELECT id, order_quantity FROM delivery_progress
                     WHERE order_id = :order_id

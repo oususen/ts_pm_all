@@ -92,6 +92,9 @@ class TieraTransportPlanner:
             )
             daily_plans[date_str] = plan
 
+        # ✅ 翌日着トラック（arrival_day_offset=1）の積載日を前日に調整
+        self._adjust_for_next_day_arrival_trucks(daily_plans, truck_map, start_date)
+
         # 集計
         total_trips = sum(plan['total_trips'] for plan in daily_plans.values())
         total_warnings = sum(len(plan['warnings']) for plan in daily_plans.values())
@@ -463,3 +466,79 @@ class TieraTransportPlanner:
             except ValueError:
                 pass
         return None
+
+    def _adjust_for_next_day_arrival_trucks(self, daily_plans, truck_map, start_date):
+        """
+        翌日着トラック（arrival_day_offset=1）の積載日を前日に調整
+
+        重要：到着日は納期日のまま変わらないため、can_advance（前倒し可否）のチェックは不要
+        お客さんから見れば納期日に届くので「前倒し」ではない
+
+        期間外でもOK（例：期間が10-15～10-28の場合、10-15のトラックを10-14に移動）
+        """
+        # 翌日着トラックの積載日調整を開始
+
+        # 日付順にソート
+        sorted_dates = sorted(daily_plans.keys())
+
+        for date_str in sorted_dates:
+            current_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            day_plan = daily_plans[date_str]
+
+            # この日のトラックプランをチェック
+            trucks_to_move = []
+            for truck_plan in day_plan['trucks']:
+                truck_id = truck_plan['truck_id']
+                if truck_id not in truck_map:
+                    continue
+
+                truck_info = truck_map[truck_id]
+                arrival_offset = int(truck_info.get('arrival_day_offset', 0) or 0)
+
+                # arrival_day_offset=1のトラックを前日に移動
+                if arrival_offset == 1:
+                    trucks_to_move.append(truck_plan)
+
+            # 移動対象のトラックを前日に移動
+            for truck_plan in trucks_to_move:
+                # 営業日の前日を探す
+                prev_date = current_date - timedelta(days=1)
+
+                # 非営業日の場合、営業日を遡る
+                if self.calendar_repo:
+                    max_attempts = 7  # 最大7日遡る
+                    for _ in range(max_attempts):
+                        if self.calendar_repo.is_working_day(prev_date):
+                            break
+                        prev_date -= timedelta(days=1)
+                    else:
+                        # 営業日が見つからない場合はそのまま処理継続
+                        pass
+
+                prev_date_str = prev_date.strftime('%Y-%m-%d')
+
+                # 前日のプランが存在しない場合は作成
+                if prev_date_str not in daily_plans:
+                    daily_plans[prev_date_str] = {
+                        'trucks': [],
+                        'total_trips': 0,
+                        'warnings': [],
+                        'remaining_demands': []
+                    }
+
+                # トラックプランを前日に移動（到着日は変わらないため、can_advanceチェック不要）
+
+                # 全ての積載アイテムのloading_dateを更新
+                for item in truck_plan['loaded_items']:
+                    item['loading_date'] = prev_date
+                    item['adjusted_for_next_day_arrival'] = True  # フラグを追加
+
+                # 前日のプランに追加
+                daily_plans[prev_date_str]['trucks'].append(truck_plan)
+                daily_plans[prev_date_str]['total_trips'] = len(daily_plans[prev_date_str]['trucks'])
+
+                # 当日のプランから削除
+                day_plan['trucks'].remove(truck_plan)
+                day_plan['total_trips'] = len(day_plan['trucks'])
+
+        # 翌日着トラックの積載日調整が完了
